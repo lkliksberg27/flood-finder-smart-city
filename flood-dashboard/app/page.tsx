@@ -20,6 +20,7 @@ interface WeatherData {
   description: string;
   tideLevel: number | null;
   forecast: { name: string; shortForecast: string; rainChance: number | null }[];
+  tideForecast: { time: string; level: number }[];
 }
 
 export default function OverviewPage() {
@@ -132,12 +133,51 @@ export default function OverviewPage() {
             </div>
             <p className="text-xs text-text-secondary mt-2">{weather.description}</p>
 
+            {/* Tide forecast sparkline */}
+            {weather.tideForecast && weather.tideForecast.length > 2 && (() => {
+              const levels = weather.tideForecast.map((t) => t.level);
+              const min = Math.min(...levels);
+              const max = Math.max(...levels);
+              const range = max - min || 1;
+              const w = 260, h = 32;
+              const points = levels.map((v, i) => {
+                const x = (i / (levels.length - 1)) * w;
+                const y = h - ((v - min) / range) * (h - 4) - 2;
+                return `${x},${y}`;
+              }).join(" ");
+              const peakTide = Math.max(...levels);
+              return (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-xs text-text-secondary mb-1">
+                    <span>24h Tide Forecast</span>
+                    <span>Peak: {peakTide.toFixed(2)}m</span>
+                  </div>
+                  <svg width={w} height={h} className="w-full">
+                    {peakTide > 0.3 && (
+                      <line x1="0" y1={h - ((0.3 - min) / range) * (h - 4) - 2} x2={w} y2={h - ((0.3 - min) / range) * (h - 4) - 2} stroke="#f87171" strokeWidth="0.5" strokeDasharray="3 3" opacity={0.5} />
+                    )}
+                    <polyline points={points} fill="none" stroke="#34d399" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              );
+            })()}
+
             {/* Rain alert */}
             {rainForecast && (
               <div className="mt-3 p-2 bg-status-amber/10 border border-status-amber/20 rounded text-xs">
                 <span className="text-status-amber font-medium">Rain expected: </span>
                 <span className="text-text-secondary">
                   {rainForecast.name} — {rainForecast.shortForecast} ({rainForecast.rainChance}% chance)
+                </span>
+              </div>
+            )}
+
+            {/* Compound event warning */}
+            {rainForecast && weather.tideForecast && Math.max(...weather.tideForecast.map((t) => t.level)) > 0.3 && (
+              <div className="mt-2 p-2 bg-status-red/10 border border-status-red/20 rounded text-xs">
+                <span className="text-status-red font-medium">Compound flood risk: </span>
+                <span className="text-text-secondary">
+                  Rain + high tide expected simultaneously — storm drains may not discharge
                 </span>
               </div>
             )}

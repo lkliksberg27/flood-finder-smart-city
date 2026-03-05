@@ -64,6 +64,8 @@ HardwareSerial gpsSerial(1);
 int baselineDistanceCm = 0;
 double lastLat = 0, lastLng = 0, lastAltGPS = 0;
 bool gpsValid = false;
+unsigned long gpsEpoch = 0;    // Unix timestamp from GPS
+unsigned long gpsEpochMillis = 0; // millis() when epoch was captured
 
 // ── Ultrasonic Reading ──────────────────────────────────────
 int readUltrasonicCm() {
@@ -130,6 +132,18 @@ bool updateGPS() {
       lastLng = gps.location.lng();
       lastAltGPS = gps.altitude.meters();
       gpsValid = true;
+      // Capture Unix epoch from GPS date/time
+      if (gps.date.isValid() && gps.time.isValid()) {
+        struct tm t;
+        t.tm_year = gps.date.year() - 1900;
+        t.tm_mon = gps.date.month() - 1;
+        t.tm_mday = gps.date.day();
+        t.tm_hour = gps.time.hour();
+        t.tm_min = gps.time.minute();
+        t.tm_sec = gps.time.second();
+        gpsEpoch = (unsigned long)mktime(&t);
+        gpsEpochMillis = millis();
+      }
       return true;
     }
     delay(10);
@@ -185,7 +199,11 @@ void sendPacket(int distanceCm, float altBaro, float batteryV) {
   json += "\"waterDetected\":" + String(waterDetected ? "true" : "false") + ",";
   json += "\"batteryV\":" + String(batteryV, 2) + ",";
   json += "\"rssi\":0,";
-  json += "\"timestamp\":" + String((unsigned long)(millis() / 1000));
+  // Use GPS-derived epoch if available, otherwise uptime
+  unsigned long ts = gpsEpoch > 0
+    ? gpsEpoch + ((millis() - gpsEpochMillis) / 1000)
+    : millis() / 1000;
+  json += "\"timestamp\":" + String(ts);
   json += "}";
 
   LoRa.beginPacket();

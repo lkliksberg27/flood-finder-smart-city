@@ -161,22 +161,23 @@ client.on('error', (err) => console.error('[MQTT] Error:', err.message));
 client.on('reconnect', () => console.log('[MQTT] Reconnecting...'));
 client.on('offline', () => console.log('[MQTT] Offline'));
 
+// ── Haversine distance (km) ─────────────────────────────────
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // ── Elevation gradient analysis helper ──────────────────────
 // Identifies road dips by finding sensors that are lower than
 // their nearest neighbors — water naturally flows to these spots.
 function analyzeElevationGradients(devices) {
   const withElevation = devices.filter((d) => d.altitude_baro != null);
   if (withElevation.length < 3) return [];
-
-  function haversineKm(lat1, lng1, lat2, lng2) {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLng = (lng2 - lng1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-      Math.sin(dLng / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
 
   return withElevation.map((d) => {
     // Find 3 nearest neighbors
@@ -209,6 +210,20 @@ function analyzeElevationGradients(devices) {
   });
 }
 
+// ── Water flow bearing calculation ──────────────────────────
+function bearing(lat1, lng1, lat2, lng2) {
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const y = Math.sin(dLng) * Math.cos(lat2 * Math.PI / 180);
+  const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
+    Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+}
+
+function bearingToDirection(deg) {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
 // ── Weekly AI Analysis (Sunday 6 AM) ───────────────────────
 async function runAIAnalysis() {
   console.log('[AI] Starting weekly infrastructure analysis...');
@@ -219,50 +234,30 @@ async function runAIAnalysis() {
     const [eventsRes, devicesRes] = await Promise.all([
       supabase
         .from('flood_events')
-        .select('*, devices(device_id, name, lat, lng, neighborhood, altitude_baro)')
+        .select('*, devices(device_id, name, lat, lng, neighborhood, altitude_baro, battery_v)')
         .gte('started_at', thirtyDaysAgo),
       supabase.from('devices').select('*'),
     ]);
 
     const events = eventsRes.data;
-    const allDevices = devicesRes.data;
+    const allDevices = devicesRes.data || [];
 
     if (!events || events.length === 0) {
       console.log('[AI] No flood events in last 30 days — skipping analysis.');
       return;
     }
 
-    // Build event summary
-    const eventSummary = events.map((e) => ({
-      device: e.device_id,
-      name: e.devices?.name,
-      neighborhood: e.devices?.neighborhood,
-      lat: e.devices?.lat,
-      lng: e.devices?.lng,
-      elevation_m: e.devices?.altitude_baro,
-      started: e.started_at,
-      ended: e.ended_at,
-      peak_depth_cm: e.peak_depth_cm,
-      duration_min: e.duration_minutes,
-      rainfall_mm: e.rainfall_mm,
-      tide_m: e.tide_level_m,
-    }));
-
-    // Analyze elevation gradients to find road dips
-    const gradients = analyzeElevationGradients(allDevices || []);
-    const dips = gradients.filter((g) => g.is_dip);
-
-    // Get current weather context
-    const weather = await getWeatherConditions(25.9565, -80.1392);
-
-    // Build per-sensor flood profiles with multi-source correlation
+    // ── 1. Per-sensor flood profiles ─────────────────────────
     const sensorProfiles = {};
     events.forEach((e) => {
       if (!sensorProfiles[e.device_id]) {
         sensorProfiles[e.device_id] = {
           count: 0, avgDepthCm: 0, maxDepthCm: 0,
-          totalDurationMin: 0, rainfallEvents: 0,
-          avgRainfallMm: 0, tidalEvents: 0, compoundEvents: 0,
+          totalDurationMin: 0, avgDurationMin: 0,
+          rainfallEvents: 0, avgRainfallMm: 0,
+          tidalEvents: 0, avgTideLevelM: 0,
+          compoundEvents: 0,
+          timeOfDayDistribution: { morning: 0, afternoon: 0, evening: 0, night: 0 },
           device: e.devices,
         };
       }
@@ -272,29 +267,101 @@ async function runAIAnalysis() {
       p.maxDepthCm = Math.max(p.maxDepthCm, e.peak_depth_cm);
       p.totalDurationMin += e.duration_minutes || 0;
       if (e.rainfall_mm > 0) { p.rainfallEvents++; p.avgRainfallMm += e.rainfall_mm; }
-      if (e.tide_level_m > 0.3) p.tidalEvents++;
+      if (e.tide_level_m > 0.3) { p.tidalEvents++; p.avgTideLevelM += e.tide_level_m; }
       if (e.rainfall_mm > 0 && e.tide_level_m > 0.3) p.compoundEvents++;
+
+      const hour = new Date(e.started_at).getHours();
+      if (hour >= 6 && hour < 12) p.timeOfDayDistribution.morning++;
+      else if (hour >= 12 && hour < 17) p.timeOfDayDistribution.afternoon++;
+      else if (hour >= 17 && hour < 22) p.timeOfDayDistribution.evening++;
+      else p.timeOfDayDistribution.night++;
     });
     Object.values(sensorProfiles).forEach((p) => {
       p.avgDepthCm = Math.round(p.avgDepthCm / p.count);
+      p.avgDurationMin = Math.round(p.totalDurationMin / p.count);
       if (p.rainfallEvents > 0) p.avgRainfallMm = +(p.avgRainfallMm / p.rainfallEvents).toFixed(1);
+      if (p.tidalEvents > 0) p.avgTideLevelM = +(p.avgTideLevelM / p.tidalEvents).toFixed(2);
     });
 
-    // Neighborhood aggregation
+    // ── 2. Elevation gradients with water flow direction ─────
+    const gradients = analyzeElevationGradients(allDevices);
+    const withElev = allDevices.filter((d) => d.altitude_baro != null);
+
+    // Add water flow direction to gradient analysis
+    const gradientsWithFlow = gradients.map((g) => {
+      const d = allDevices.find((dev) => dev.device_id === g.device_id);
+      if (!d) return g;
+      const uphillNeighbors = withElev
+        .filter((n) => n.device_id !== d.device_id && n.altitude_baro > d.altitude_baro)
+        .map((n) => ({
+          from: n.device_id,
+          direction: bearingToDirection(bearing(d.lat, d.lng, n.lat, n.lng)),
+          distance_m: Math.round(haversineKm(d.lat, d.lng, n.lat, n.lng) * 1000),
+        }))
+        .sort((a, b) => a.distance_m - b.distance_m)
+        .slice(0, 3);
+      return { ...g, water_flows_from: uphillNeighbors };
+    });
+
+    // ── 3. Neighborhood aggregation ─────────────────────────
     const neighborhoodStats = {};
-    (allDevices || []).forEach((d) => {
+    allDevices.forEach((d) => {
       const n = d.neighborhood || 'Unknown';
-      if (!neighborhoodStats[n]) neighborhoodStats[n] = { totalEvents: 0, avgElevation: 0, sensorCount: 0 };
+      if (!neighborhoodStats[n]) neighborhoodStats[n] = {
+        totalEvents: 0, avgElevation: 0, sensorCount: 0,
+        worstSensor: '', worstSensorEvents: 0,
+      };
       neighborhoodStats[n].sensorCount++;
       neighborhoodStats[n].avgElevation += d.altitude_baro || 0;
     });
-    Object.entries(sensorProfiles).forEach(([, p]) => {
+    Object.entries(sensorProfiles).forEach(([deviceId, p]) => {
       const n = p.device?.neighborhood || 'Unknown';
-      if (neighborhoodStats[n]) neighborhoodStats[n].totalEvents += p.count;
+      if (neighborhoodStats[n]) {
+        neighborhoodStats[n].totalEvents += p.count;
+        if (p.count > neighborhoodStats[n].worstSensorEvents) {
+          neighborhoodStats[n].worstSensor = deviceId;
+          neighborhoodStats[n].worstSensorEvents = p.count;
+        }
+      }
     });
     Object.values(neighborhoodStats).forEach((ns) => {
       ns.avgElevation = +(ns.avgElevation / ns.sensorCount).toFixed(2);
     });
+
+    // ── 4. Rainfall threshold analysis ──────────────────────
+    const rainfallFloodPairs = events
+      .filter((e) => e.rainfall_mm != null && e.rainfall_mm > 0)
+      .map((e) => ({ rainfall_mm: e.rainfall_mm, depth_cm: e.peak_depth_cm, device: e.device_id }));
+
+    const rainfallThreshold = rainfallFloodPairs.length > 2
+      ? +(rainfallFloodPairs.reduce((s, p) => s + p.rainfall_mm, 0) / rainfallFloodPairs.length * 0.5).toFixed(1)
+      : null;
+
+    // ── 5. Flood risk scores ────────────────────────────────
+    const riskScores = allDevices.map((d) => {
+      const profile = sensorProfiles[d.device_id];
+      const gradient = gradients.find((g) => g.device_id === d.device_id);
+      let score = 0;
+      score += Math.min(40, (profile?.count ?? 0) * 8);
+      score += Math.min(25, (profile?.maxDepthCm ?? 0) * 0.5);
+      if (d.altitude_baro != null && d.altitude_baro < 1.5) {
+        score += Math.round((1.5 - d.altitude_baro) * 13);
+      }
+      if (gradient?.is_dip) score += Math.min(15, Math.abs(gradient.elevation_diff_m) * 50);
+      return {
+        device_id: d.device_id,
+        name: d.name,
+        neighborhood: d.neighborhood,
+        risk_score: Math.min(100, Math.round(score)),
+        risk_level: score > 60 ? 'critical' : score > 35 ? 'high' : score > 15 ? 'moderate' : 'low',
+      };
+    }).sort((a, b) => b.risk_score - a.risk_score);
+
+    // ── 6. Get current weather context ──────────────────────
+    const weather = await getWeatherConditions(25.9565, -80.1392);
+
+    // ── 7. Build comprehensive AI prompt ────────────────────
+    const compoundCount = events.filter((e) => e.rainfall_mm > 0 && e.tide_level_m > 0.3).length;
 
     const anthropic = new Anthropic();
 
@@ -304,16 +371,53 @@ async function runAIAnalysis() {
       messages: [{
         role: 'user',
         content: `You are a senior urban flood infrastructure engineer consulting for the City of Aventura, Florida.
-Analyzing ${(allDevices || []).length} IoT sensors with BMP390 altimeters, correlated with NOAA weather/tide data.
+You are analyzing 30 days of real-time data from ${allDevices.length} IoT flood sensors mounted on mailboxes across the city.
+Each sensor uses an ultrasonic distance sensor to detect water depth, a BMP390 barometric altimeter for precision elevation (±0.25m), and GPS.
+NOAA weather and tide data is automatically correlated with each flood event.
 
-SENSOR FLOOD PROFILES (30 days): ${JSON.stringify(sensorProfiles, null, 2)}
-ELEVATION GRADIENTS & ROAD DIPS: ${JSON.stringify(gradients, null, 2)}
-NEIGHBORHOOD STATS: ${JSON.stringify(neighborhoodStats, null, 2)}
+═══════════════════════════════════════════════════
+SECTION 1: FLOOD RISK SCORES (top 10)
+═══════════════════════════════════════════════════
+${JSON.stringify(riskScores.slice(0, 10), null, 2)}
+
+═══════════════════════════════════════════════════
+SECTION 2: PER-SENSOR FLOOD PROFILES (30 days)
+═══════════════════════════════════════════════════
+${JSON.stringify(sensorProfiles, null, 2)}
+
+═══════════════════════════════════════════════════
+SECTION 3: ELEVATION GRADIENT & WATER FLOW ANALYSIS
+═══════════════════════════════════════════════════
+${JSON.stringify(gradientsWithFlow.filter((g) => g.is_dip || (sensorProfiles[g.device_id]?.count ?? 0) > 0), null, 2)}
+
+═══════════════════════════════════════════════════
+SECTION 4: NEIGHBORHOOD AGGREGATION
+═══════════════════════════════════════════════════
+${JSON.stringify(neighborhoodStats, null, 2)}
+
+═══════════════════════════════════════════════════
+SECTION 5: RAINFALL THRESHOLD ANALYSIS
+Minimum rainfall that triggers flooding: ~${rainfallThreshold ?? 'insufficient data'}mm
+Sample pairs: ${JSON.stringify(rainfallFloodPairs.slice(0, 15), null, 2)}
+═══════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════
+SECTION 6: COMPOUND EVENT ANALYSIS
+Rain + high tide simultaneously: ${compoundCount} of ${events.length} total events
+═══════════════════════════════════════════════════
+
 WEATHER CONTEXT: ${JSON.stringify(weather, null, 2)}
 
-Compound events (rain + high tide simultaneously): ${events.filter((e) => e.rainfall_mm > 0 && e.tide_level_m > 0.3).length} of ${events.length}
+ANALYSIS INSTRUCTIONS:
+Produce actionable infrastructure recommendations for the Aventura City Commission. Each must:
+1. IDENTIFY the problem using data evidence (sensor IDs, depths, frequencies, elevations)
+2. EXPLAIN root cause by cross-referencing elevation data, water flow direction, rainfall correlation, tidal influence, and compound events
+3. RECOMMEND specific infrastructure: catch basins, French drains, re-grading, bioswales, pump stations, backflow preventers, pipe upsizing, tide gates, permeable pavement
+4. ESTIMATE impact: "reduce flood frequency at [sensor] from [X] to ~[Y] events/month, a [Z]% reduction"
+5. ESTIMATE cost: low ($10K-50K), medium ($50K-250K), high ($250K-1M+)
+6. PRIORITIZE by cost-effectiveness
 
-Return raw JSON (no markdown):
+Return raw JSON (no markdown fences):
 {
   "recommendations": [
     {
@@ -321,11 +425,13 @@ Return raw JSON (no markdown):
       "category": "drainage"|"elevation"|"barrier"|"other",
       "affected_devices": ["FF-001"],
       "title": "Short title",
-      "text": "Multi-paragraph recommendation citing sensor IDs, depths, elevations, rainfall thresholds, and tide correlations. Include specific infrastructure (catch basins, french drains, re-grading, swales, pump stations, backflow preventers, pipe upsizing). Estimate flood reduction percentage and cost category (low $10K-50K, medium $50K-250K, high $250K-1M+)."
+      "text": "Detailed recommendation with data citations",
+      "estimated_cost": "low"|"medium"|"high",
+      "estimated_reduction_pct": 65
     }
   ]
 }
-Generate 6-8 recommendations mixing ALL data sources for cross-referenced infrastructure insights.`,
+Generate 6-8 recommendations mixing ALL data sources.`,
       }],
     });
 
@@ -345,7 +451,7 @@ Generate 6-8 recommendations mixing ALL data sources for cross-referenced infras
 
     for (const rec of parsed.recommendations) {
       const fullText = rec.title
-        ? `## ${rec.title}\n\n${rec.text}`
+        ? `## ${rec.title}\n\n${rec.text}${rec.estimated_cost ? `\n\nEstimated cost: ${rec.estimated_cost}` : ''}${rec.estimated_reduction_pct ? ` | Estimated flood reduction: ${rec.estimated_reduction_pct}%` : ''}`
         : rec.text;
       await supabase.from('infrastructure_recommendations').insert({
         analysis_period_days: 30,

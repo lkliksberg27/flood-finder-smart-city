@@ -149,50 +149,52 @@ export default function SensorsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((d) => (
-              <tr
-                key={d.device_id}
-                onClick={() => handleExpand(d.device_id)}
-                className={`border-b border-border-card cursor-pointer transition-colors hover:bg-bg-card-hover ${
-                  isOffline(d) ? "bg-status-red/5" : ""
-                }`}
-              >
-                <td className="px-4 py-3 font-mono text-xs">{d.device_id}</td>
-                <td className="px-4 py-3">{d.name ?? "—"}</td>
-                <td className="px-4 py-3">{d.neighborhood ?? "—"}</td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                    d.status === "online" ? "bg-status-green/20 text-status-green" :
-                    d.status === "alert" ? "bg-status-red/20 text-status-red" :
-                    "bg-gray-500/20 text-gray-400"
-                  }`}>
-                    {d.status.toUpperCase()}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={
-                    (d.battery_v ?? 4) < 3.3 ? "text-status-amber" : ""
-                  }>
-                    {d.battery_v?.toFixed(1) ?? "—"}V
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-text-secondary text-xs">
-                  {d.last_seen ? new Date(d.last_seen).toLocaleString() : "Never"}
-                </td>
-                <td className="px-4 py-3">{d.altitude_baro?.toFixed(1) ?? "—"}m</td>
-                <td className="px-4 py-3">
-                  <span className={
-                    (floodCounts[d.device_id] ?? 0) > 5 ? "text-status-red font-medium" :
-                    (floodCounts[d.device_id] ?? 0) > 0 ? "text-status-amber" : ""
-                  }>
-                    {floodCounts[d.device_id] ?? 0}
-                  </span>
-                </td>
-              </tr>
-            ))}
-            {/* Expanded readings row rendered separately to avoid fragment key issues */}
-            {filtered.map((d) =>
-              expandedId === d.device_id ? (
+            {filtered.flatMap((d) => {
+              const mainRow = (
+                <tr
+                  key={d.device_id}
+                  onClick={() => handleExpand(d.device_id)}
+                  className={`border-b border-border-card cursor-pointer transition-colors hover:bg-bg-card-hover ${
+                    isOffline(d) ? "bg-status-red/5" : ""
+                  }`}
+                >
+                  <td className="px-4 py-3 font-mono text-xs">{d.device_id}</td>
+                  <td className="px-4 py-3">{d.name ?? "—"}</td>
+                  <td className="px-4 py-3">{d.neighborhood ?? "—"}</td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      d.status === "online" ? "bg-status-green/20 text-status-green" :
+                      d.status === "alert" ? "bg-status-red/20 text-status-red" :
+                      "bg-gray-500/20 text-gray-400"
+                    }`}>
+                      {d.status.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={
+                      (d.battery_v ?? 4) < 3.3 ? "text-status-amber" : ""
+                    }>
+                      {d.battery_v?.toFixed(1) ?? "—"}V
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-text-secondary text-xs">
+                    {d.last_seen ? new Date(d.last_seen).toLocaleString() : "Never"}
+                  </td>
+                  <td className="px-4 py-3">{d.altitude_baro?.toFixed(1) ?? "—"}m</td>
+                  <td className="px-4 py-3">
+                    <span className={
+                      (floodCounts[d.device_id] ?? 0) > 5 ? "text-status-red font-medium" :
+                      (floodCounts[d.device_id] ?? 0) > 0 ? "text-status-amber" : ""
+                    }>
+                      {floodCounts[d.device_id] ?? 0}
+                    </span>
+                  </td>
+                </tr>
+              );
+
+              if (expandedId !== d.device_id) return [mainRow];
+
+              const expandRow = (
                 <tr key={`${d.device_id}-expand`}>
                   <td colSpan={8} className="px-4 py-3 bg-bg-primary">
                     <p className="text-xs text-text-secondary mb-2">Last 10 Readings</p>
@@ -214,8 +216,10 @@ export default function SensorsPage() {
                     </div>
                   </td>
                 </tr>
-              ) : null
-            )}
+              );
+
+              return [mainRow, expandRow];
+            })}
           </tbody>
         </table>
         {filtered.length === 0 && (

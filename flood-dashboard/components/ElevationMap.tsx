@@ -16,6 +16,16 @@ function elevationColor(elevation: number, min: number, max: number): string {
   return `rgb(${Math.round(251 - t * 192)},${Math.round(191 - t * 61)},${Math.round(36 + t * 210)})`;
 }
 
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 interface Props {
   devices: Device[];
   showOverlay: boolean;
@@ -24,7 +34,7 @@ interface Props {
 export function ElevationMap({ devices, showOverlay }: Props) {
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const overlayRef = useRef<L.CircleMarker[]>([]);
+  const overlayRef = useRef<L.Layer[]>([]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -45,21 +55,67 @@ export function ElevationMap({ devices, showOverlay }: Props) {
     overlayRef.current = [];
     if (!showOverlay) return;
 
-    const elevations = devices.map((d) => d.altitude_baro).filter((e): e is number => e != null);
-    if (elevations.length === 0) return;
+    const withElev = devices.filter((d) => d.altitude_baro != null);
+    if (withElev.length === 0) return;
+
+    const elevations = withElev.map((d) => d.altitude_baro!);
     const min = Math.min(...elevations);
     const max = Math.max(...elevations);
 
-    devices.forEach((d) => {
-      if (d.altitude_baro == null) return;
-      const color = elevationColor(d.altitude_baro, min, max);
+    // Draw water flow arrows from higher to lower nearby sensors
+    withElev.forEach((d) => {
+      const neighbors = withElev
+        .filter((n) => n.device_id !== d.device_id)
+        .map((n) => ({ ...n, dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 3);
+
+      neighbors.forEach((n) => {
+        if (n.altitude_baro == null || d.altitude_baro == null) return;
+        // Only draw arrow from higher to lower
+        if (d.altitude_baro <= n.altitude_baro!) return;
+        // Only show arrows within 1km
+        if (n.dist > 1) return;
+
+        const line = L.polyline(
+          [[d.lat, d.lng], [n.lat, n.lng]],
+          {
+            color: "#3b82f6",
+            weight: 1.5,
+            opacity: 0.3,
+            dashArray: "4 6",
+          }
+        ).addTo(mapRef.current!);
+        overlayRef.current.push(line);
+      });
+    });
+
+    // Draw elevation circles on top
+    withElev.forEach((d) => {
+      const color = elevationColor(d.altitude_baro!, min, max);
+
+      // Find if this is a dip
+      const neighbors = withElev
+        .filter((n) => n.device_id !== d.device_id)
+        .map((n) => ({ ...n, dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 3);
+      const avgNeighborElev = neighbors.reduce((s, n) => s + (n.altitude_baro ?? 0), 0) / neighbors.length;
+      const isDip = (d.altitude_baro! - avgNeighborElev) < -0.1;
+
       const marker = L.circleMarker([d.lat, d.lng], {
-        radius: 18, fillColor: color, color, weight: 0, fillOpacity: 0.55,
+        radius: isDip ? 22 : 18,
+        fillColor: color,
+        color: isDip ? "#f87171" : color,
+        weight: isDip ? 2 : 0,
+        fillOpacity: 0.55,
       }).addTo(mapRef.current!);
+
       marker.bindPopup(`
         <div style="font-family:'DM Sans',sans-serif">
-          <strong>${d.device_id}</strong><br/>
-          Elevation: <strong>${d.altitude_baro.toFixed(2)}m</strong><br/>
+          <strong>${d.device_id}</strong>${isDip ? ' <span style="color:#f87171">(Road Dip)</span>' : ''}<br/>
+          Elevation: <strong>${d.altitude_baro!.toFixed(2)}m</strong><br/>
+          ${isDip ? `<span style="color:#f87171">${Math.round((avgNeighborElev - d.altitude_baro!) * 100)}cm below neighbors</span><br/>` : ''}
           ${d.neighborhood ? `Area: ${d.neighborhood}` : ""}
         </div>
       `);
