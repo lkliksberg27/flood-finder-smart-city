@@ -1,0 +1,17 @@
+{
+  "name": "flood-bridge",
+  "version": "1.0.0",
+  "description": "MQTT-to-Supabase bridge for Flood Finder sensor network",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js",
+    "simulate": "node simulate.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@supabase/supabase-js": "^2.49.1",
+    "dotenv": "^16.4.7",
+    "mqtt": "^5.10.3",
+    "node-cron": "^3.0.3"
+  }
+}
