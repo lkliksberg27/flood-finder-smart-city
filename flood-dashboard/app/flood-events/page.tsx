@@ -29,6 +29,8 @@ export default function FloodEventsPage() {
   const [filterSeverity, setFilterSeverity] = useState<Severity>("");
   const [selectedEvent, setSelectedEvent] = useState<FloodEvent | null>(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
 
   const fetchEvents = useCallback(async () => {
     try {
@@ -202,7 +204,7 @@ export default function FloodEventsPage() {
         />
         {(filterNeighborhood || filterSeverity || filterStartDate || filterEndDate) && (
           <button
-            onClick={() => { setFilterNeighborhood(""); setFilterSeverity(""); setFilterStartDate(""); setFilterEndDate(""); }}
+            onClick={() => { setFilterNeighborhood(""); setFilterSeverity(""); setFilterStartDate(""); setFilterEndDate(""); setPage(0); }}
             className="text-xs text-text-secondary hover:text-text-primary transition-colors"
           >
             Clear filters
@@ -213,6 +215,27 @@ export default function FloodEventsPage() {
       {/* Events table */}
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs text-text-secondary">{filtered.length} event{filtered.length !== 1 ? "s" : ""} shown</p>
+        {filtered.length > PAGE_SIZE && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(Math.max(0, page - 1))}
+              disabled={page === 0}
+              className="px-2 py-1 text-xs bg-bg-card border border-border-card rounded disabled:opacity-30 hover:bg-bg-card-hover transition-colors"
+            >
+              Prev
+            </button>
+            <span className="text-xs text-text-secondary">
+              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}
+            </span>
+            <button
+              onClick={() => setPage(Math.min(Math.floor((filtered.length - 1) / PAGE_SIZE), page + 1))}
+              disabled={(page + 1) * PAGE_SIZE >= filtered.length}
+              className="px-2 py-1 text-xs bg-bg-card border border-border-card rounded disabled:opacity-30 hover:bg-bg-card-hover transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
       <div className="bg-bg-card border border-border-card rounded-lg overflow-hidden">
         <table className="w-full text-sm">
@@ -229,7 +252,7 @@ export default function FloodEventsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((e) => {
+            {filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((e) => {
               const dev = e.devices as Device | undefined;
               return (
                 <tr
