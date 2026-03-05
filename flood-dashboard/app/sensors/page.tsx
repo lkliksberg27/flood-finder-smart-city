@@ -97,6 +97,38 @@ export default function SensorsPage() {
         </button>
       </div>
 
+      {/* Fleet summary */}
+      {devices.length > 0 && (
+        <div className="grid grid-cols-5 gap-4 mb-6">
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Total Sensors</p>
+            <p className="text-2xl font-bold mt-1">{devices.length}</p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Online</p>
+            <p className="text-2xl font-bold text-status-green mt-1">
+              {devices.filter((d) => d.status === "online").length}
+            </p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Alerting</p>
+            <p className="text-2xl font-bold text-status-red mt-1">
+              {devices.filter((d) => d.status === "alert").length}
+            </p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Low Battery</p>
+            <p className="text-2xl font-bold text-status-amber mt-1">
+              {devices.filter((d) => (d.battery_v ?? 4) < 3.3).length}
+            </p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Neighborhoods</p>
+            <p className="text-2xl font-bold text-status-blue mt-1">{neighborhoods.length}</p>
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex gap-3 mb-4">
         <select
@@ -194,25 +226,76 @@ export default function SensorsPage() {
 
               if (expandedId !== d.device_id) return [mainRow];
 
+              // Build mini sparkline from readings
+              const sparklineValues = expandedReadings.map((r) => r.distance_cm ?? 0).reverse();
+              const sparklineSvg = sparklineValues.length >= 2 ? (() => {
+                const w = 200, h = 30;
+                const min = Math.min(...sparklineValues);
+                const max = Math.max(...sparklineValues);
+                const range = max - min || 1;
+                const points = sparklineValues.map((v, i) => {
+                  const x = (i / (sparklineValues.length - 1)) * w;
+                  const y = h - ((v - min) / range) * (h - 4) - 2;
+                  return `${x},${y}`;
+                }).join(" ");
+                return (
+                  <svg width={w} height={h} className="block">
+                    <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                );
+              })() : null;
+
               const expandRow = (
                 <tr key={`${d.device_id}-expand`}>
-                  <td colSpan={8} className="px-4 py-3 bg-bg-primary">
-                    <p className="text-xs text-text-secondary mb-2">Last 10 Readings</p>
-                    <div className="grid grid-cols-5 gap-2 text-xs font-mono">
-                      <span className="text-text-secondary">Time</span>
-                      <span className="text-text-secondary">Distance</span>
-                      <span className="text-text-secondary">Flood Depth</span>
-                      <span className="text-text-secondary">Battery</span>
-                      <span className="text-text-secondary">RSSI</span>
-                      {expandedReadings.map((r) => [
-                        <span key={`${r.id}-t`}>{new Date(r.recorded_at).toLocaleTimeString()}</span>,
-                        <span key={`${r.id}-d`}>{r.distance_cm}cm</span>,
-                        <span key={`${r.id}-f`} className={r.flood_depth_cm > 0 ? "text-status-red" : ""}>
-                          {r.flood_depth_cm}cm
-                        </span>,
-                        <span key={`${r.id}-b`}>{r.battery_v?.toFixed(1)}V</span>,
-                        <span key={`${r.id}-r`}>{r.rssi}dBm</span>,
-                      ])}
+                  <td colSpan={8} className="px-4 py-4 bg-bg-primary">
+                    <div className="flex gap-6">
+                      <div className="flex-1">
+                        <p className="text-xs text-text-secondary mb-2">Last 10 Readings</p>
+                        <div className="grid grid-cols-5 gap-2 text-xs font-mono">
+                          <span className="text-text-secondary">Time</span>
+                          <span className="text-text-secondary">Distance</span>
+                          <span className="text-text-secondary">Flood Depth</span>
+                          <span className="text-text-secondary">Battery</span>
+                          <span className="text-text-secondary">RSSI</span>
+                          {expandedReadings.map((r) => [
+                            <span key={`${r.id}-t`}>{new Date(r.recorded_at).toLocaleTimeString()}</span>,
+                            <span key={`${r.id}-d`}>{r.distance_cm}cm</span>,
+                            <span key={`${r.id}-f`} className={r.flood_depth_cm > 0 ? "text-status-red" : ""}>
+                              {r.flood_depth_cm}cm
+                            </span>,
+                            <span key={`${r.id}-b`}>{r.battery_v?.toFixed(1)}V</span>,
+                            <span key={`${r.id}-r`}>{r.rssi}dBm</span>,
+                          ])}
+                        </div>
+                      </div>
+                      <div className="w-[220px] space-y-3">
+                        {sparklineSvg && (
+                          <div>
+                            <p className="text-xs text-text-secondary mb-1">Distance Trend</p>
+                            {sparklineSvg}
+                          </div>
+                        )}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="bg-bg-card rounded p-2">
+                            <p className="text-text-secondary">Elevation</p>
+                            <p className="font-medium">{d.altitude_baro?.toFixed(2) ?? "—"}m</p>
+                          </div>
+                          <div className="bg-bg-card rounded p-2">
+                            <p className="text-text-secondary">Floods/30d</p>
+                            <p className={`font-medium ${(floodCounts[d.device_id] ?? 0) > 3 ? "text-status-red" : ""}`}>
+                              {floodCounts[d.device_id] ?? 0}
+                            </p>
+                          </div>
+                          <div className="bg-bg-card rounded p-2">
+                            <p className="text-text-secondary">Coordinates</p>
+                            <p className="font-mono text-[10px]">{d.lat.toFixed(4)}, {d.lng.toFixed(4)}</p>
+                          </div>
+                          <div className="bg-bg-card rounded p-2">
+                            <p className="text-text-secondary">Installed</p>
+                            <p className="font-medium">{d.installed_at ? new Date(d.installed_at).toLocaleDateString() : "—"}</p>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </td>
                 </tr>

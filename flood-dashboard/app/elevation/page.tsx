@@ -175,6 +175,51 @@ export default function ElevationPage() {
             </div>
           </div>
 
+          {/* Neighborhood summary */}
+          {(() => {
+            const nStats: Record<string, { count: number; avgElev: number; dips: number; floods: number }> = {};
+            devices.forEach((d) => {
+              const n = d.neighborhood ?? "Unknown";
+              if (!nStats[n]) nStats[n] = { count: 0, avgElev: 0, dips: 0, floods: 0 };
+              nStats[n].count++;
+              nStats[n].avgElev += d.altitude_baro ?? 0;
+              nStats[n].floods += floodCounts[d.device_id] ?? 0;
+            });
+            dips.forEach((d) => {
+              const n = d.neighborhood ?? "Unknown";
+              if (nStats[n]) nStats[n].dips++;
+            });
+            Object.values(nStats).forEach((ns) => {
+              ns.avgElev = ns.count > 0 ? parseFloat((ns.avgElev / ns.count).toFixed(2)) : 0;
+            });
+            const sorted = Object.entries(nStats).sort((a, b) => b[1].floods - a[1].floods);
+
+            return sorted.length > 0 ? (
+              <div>
+                <h3 className="text-sm font-semibold mb-3">Neighborhood Overview</h3>
+                <div className="space-y-2">
+                  {sorted.map(([name, ns]) => (
+                    <div key={name} className="bg-bg-card border border-border-card rounded p-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium">{name}</span>
+                        <span className={`text-xs font-medium ${
+                          ns.floods > 10 ? "text-status-red" : ns.floods > 0 ? "text-status-amber" : "text-status-green"
+                        }`}>
+                          {ns.floods} floods
+                        </span>
+                      </div>
+                      <div className="flex gap-3 mt-1 text-xs text-text-secondary">
+                        <span>{ns.count} sensors</span>
+                        <span>Avg elev: {ns.avgElev}m</span>
+                        {ns.dips > 0 && <span className="text-status-red">{ns.dips} dip{ns.dips > 1 ? "s" : ""}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null;
+          })()}
+
           {/* Legend */}
           <div className="bg-bg-card border border-border-card rounded p-3">
             <p className="text-xs text-text-secondary mb-2">Elevation Legend</p>
@@ -184,6 +229,14 @@ export default function ElevationPage() {
             <div className="flex justify-between text-xs text-text-secondary mt-1">
               <span>Low (flood risk)</span>
               <span>High (safe)</span>
+            </div>
+            <div className="flex items-center gap-2 mt-2 text-xs text-text-secondary">
+              <div className="w-8 h-0.5 border-t border-dashed border-blue-500" />
+              <span>Water flow direction</span>
+            </div>
+            <div className="flex items-center gap-2 mt-1 text-xs text-text-secondary">
+              <div className="w-4 h-4 rounded-full border-2 border-status-red" />
+              <span>Road dip detected</span>
             </div>
           </div>
         </div>
