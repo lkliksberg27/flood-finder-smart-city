@@ -222,6 +222,38 @@ export default function OverviewPage() {
           </div>
         )}
 
+        {/* Neighborhood quick status */}
+        {devices.length > 0 && (() => {
+          const nData: Record<string, { total: number; alerting: number; offline: number }> = {};
+          devices.forEach((d) => {
+            const n = d.neighborhood ?? "Other";
+            if (!nData[n]) nData[n] = { total: 0, alerting: 0, offline: 0 };
+            nData[n].total++;
+            if (d.status === "alert") nData[n].alerting++;
+            if (d.status === "offline") nData[n].offline++;
+          });
+          const areas = Object.entries(nData).sort((a, b) => b[1].alerting - a[1].alerting);
+          if (areas.length === 0) return null;
+          return (
+            <div className="bg-bg-card border border-border-card rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-3">Neighborhoods</h3>
+              <div className="space-y-2">
+                {areas.slice(0, 6).map(([name, data]) => (
+                  <div key={name} className="flex items-center justify-between text-xs">
+                    <span className="text-text-secondary truncate max-w-[140px]">{name}</span>
+                    <div className="flex items-center gap-2">
+                      {data.alerting > 0 && (
+                        <span className="text-status-red font-medium">{data.alerting} alert</span>
+                      )}
+                      <span className="text-text-secondary">{data.total - data.offline}/{data.total}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Network health */}
         {devices.length > 0 && (() => {
           const staleCount = devices.filter((d) => {
