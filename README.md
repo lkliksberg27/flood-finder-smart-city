@@ -51,7 +51,9 @@ infrastructure improvements.
 - **Compound event analysis** — identifies when rain + high tide combine to overwhelm drainage
 - **AI infrastructure recommendations** — Claude analyzes all data sources to suggest specific improvements with cost estimates and flood reduction percentages
 - **Live dashboard** — real-time map with Supabase realtime subscriptions
-- **Fleet management** — battery monitoring, offline detection, CSV export
+- **Water flow visualization** — directional flow lines on elevation map showing drainage patterns
+- **Network health monitoring** — real-time fleet health percentage, stale sensor detection
+- **Fleet management** — battery monitoring, offline detection, CSV export for sensors and events
 
 ## Folder Structure
 
@@ -72,7 +74,7 @@ flood-finder-smart-city/
 |   |   +-- sensors/            # Sensor management table
 |   |   +-- flood-events/       # Flood event history + filters
 |   |   +-- elevation/          # Elevation map + road dip analysis
-|   |   +-- analytics/          # 8 charts including NOAA correlations
+|   |   +-- analytics/          # 9 charts including NOAA correlations
 |   |   +-- ai-recommendations/ # AI infrastructure analysis
 |   |   +-- api/                # Server routes (weather, analysis, export)
 |   +-- components/             # Sidebar, Map, ElevationMap, StatCard, Sparkline
@@ -88,12 +90,12 @@ flood-finder-smart-city/
 
 | Page | Description |
 |------|-------------|
-| **Overview** | Full-screen map with live sensor markers, weather panel (NOAA), active flood alerts, battery stats. Supabase realtime updates. |
-| **Sensors** | Sortable/filterable data table. Columns: ID, name, neighborhood, status, battery, last seen, elevation, flood count (30d). Expandable rows show last 10 readings. CSV export. |
-| **Flood Events** | Timeline of all flood events with start/end times, duration, peak depth, NOAA rainfall, tide level. Filters: neighborhood, severity, date range. Click to show on map. |
-| **Elevation** | Heatmap overlay showing BMP390 elevation data. Road dip detection panel identifies sensors lower than neighbors with flood correlation. |
-| **Analytics** | 8 charts: weekly trends, top flooding sensors, elevation vs flood frequency, depth vs rainfall, tide vs depth, time-of-day distribution, battery health. |
-| **AI Analysis** | On-demand Claude analysis. Cross-references elevation gradients, NOAA data, flood frequency, compound events. Generates titled recommendations with priority, category, cost estimate, and flood reduction percentage. |
+| **Overview** | Full-screen map with live sensor markers, weather panel (NOAA), 24h tide forecast sparkline, compound flood risk alerts, network health indicator, active flood events. Supabase realtime updates. |
+| **Sensors** | Fleet summary stats, sortable/filterable data table with flood counts, expandable rows with distance sparkline and detailed sensor info. CSV export with 30-day flood counts. |
+| **Flood Events** | Timeline with severity badges and COMPOUND event tags. Filters: neighborhood, severity, date range. Mini map for selected events. CSV export with all NOAA correlation data. |
+| **Elevation** | Elevation heatmap with water flow direction lines between sensors. Road dip detection with red-bordered markers. Neighborhood summary panel with per-area flood counts and dip detection. |
+| **Analytics** | 9 charts: weekly trends, top flooding sensors, elevation vs flood frequency, depth vs rainfall, tide vs depth, time-of-day distribution, compound event breakdown, battery health. Summary stats row. |
+| **AI Analysis** | On-demand Claude analysis with executive summary. Cross-references elevation gradients, water flow direction, NOAA data, flood frequency, risk scores, compound events. Titled recommendations with priority, category, cost estimate, and flood reduction percentage. |
 
 ## AI Analysis Engine
 
