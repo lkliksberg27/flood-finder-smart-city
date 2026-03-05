@@ -3,7 +3,7 @@ const mqtt = require('mqtt');
 const { createClient } = require('@supabase/supabase-js');
 const cron = require('node-cron');
 const Anthropic = require('@anthropic-ai/sdk');
-const { getRainfall, getTideLevel } = require('./noaa');
+const { getRainfall, getTideLevel, getWeatherConditions } = require('./noaa');
 
 // ── Config ──────────────────────────────────────────────────
 const MQTT_URL = `mqtts://${process.env.MQTT_HOST}:8883`;
@@ -62,11 +62,20 @@ async function handleMessage(topic, payload) {
   if (readErr) console.error('[DB] Insert reading error:', readErr.message);
   else console.log(`[DB] Reading saved for ${data.deviceId} | flood_depth=${floodDepth}cm`);
 
-  // Update device status
+  // Update device status + altitude from barometric sensor
   const newStatus = waterDetected ? 'alert' : 'online';
+  const updateData = {
+    last_seen: new Date().toISOString(),
+    battery_v: data.batteryV,
+    status: newStatus,
+  };
+  // Update device elevation from BMP390 if available
+  if (data.altitudeBaro != null) {
+    updateData.altitude_baro = data.altitudeBaro;
+  }
   const { error: devErr } = await supabase
     .from('devices')
-    .update({ last_seen: new Date().toISOString(), battery_v: data.batteryV, status: newStatus })
+    .update(updateData)
     .eq('device_id', data.deviceId);
   if (devErr) console.error('[DB] Update device error:', devErr.message);
 
@@ -88,14 +97,13 @@ async function manageFloodEvent(deviceId, waterDetected, floodDepth) {
 
   if (waterDetected) {
     if (openEvent) {
-      // Update peak depth if higher
       if (floodDepth > openEvent.peak_depth_cm) {
         await supabase.from('flood_events')
           .update({ peak_depth_cm: floodDepth })
           .eq('id', openEvent.id);
       }
     } else {
-      // Start new flood event, enrich with NOAA data
+      // Start new flood event — enrich with NOAA weather + tide data
       const { data: dev } = await supabase
         .from('devices')
         .select('lat, lng')
@@ -118,10 +126,9 @@ async function manageFloodEvent(deviceId, waterDetected, floodDepth) {
         rainfall_mm: rainfall,
         tide_level_m: tide,
       });
-      console.log(`[EVENT] Flood started at ${deviceId} — depth=${floodDepth}cm`);
+      console.log(`[EVENT] Flood started at ${deviceId} — depth=${floodDepth}cm rain=${rainfall}mm tide=${tide}m`);
     }
   } else if (openEvent) {
-    // Water gone — close the event
     await supabase.from('flood_events')
       .update({ ended_at: new Date().toISOString() })
       .eq('id', openEvent.id);
@@ -154,6 +161,54 @@ client.on('error', (err) => console.error('[MQTT] Error:', err.message));
 client.on('reconnect', () => console.log('[MQTT] Reconnecting...'));
 client.on('offline', () => console.log('[MQTT] Offline'));
 
+// ── Elevation gradient analysis helper ──────────────────────
+// Identifies road dips by finding sensors that are lower than
+// their nearest neighbors — water naturally flows to these spots.
+function analyzeElevationGradients(devices) {
+  const withElevation = devices.filter((d) => d.altitude_baro != null);
+  if (withElevation.length < 3) return [];
+
+  function haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  return withElevation.map((d) => {
+    // Find 3 nearest neighbors
+    const neighbors = withElevation
+      .filter((n) => n.device_id !== d.device_id)
+      .map((n) => ({
+        ...n,
+        distance_km: haversineKm(d.lat, d.lng, n.lat, n.lng),
+      }))
+      .sort((a, b) => a.distance_km - b.distance_km)
+      .slice(0, 3);
+
+    const avgNeighborElev = neighbors.reduce((s, n) => s + n.altitude_baro, 0) / neighbors.length;
+    const elevDiff = d.altitude_baro - avgNeighborElev;
+    const slopePercent = neighbors.length > 0
+      ? (elevDiff / (neighbors[0].distance_km * 1000)) * 100
+      : 0;
+
+    return {
+      device_id: d.device_id,
+      name: d.name,
+      neighborhood: d.neighborhood,
+      elevation_m: d.altitude_baro,
+      avg_neighbor_elevation_m: parseFloat(avgNeighborElev.toFixed(2)),
+      elevation_diff_m: parseFloat(elevDiff.toFixed(2)),
+      slope_percent: parseFloat(slopePercent.toFixed(3)),
+      is_dip: elevDiff < -0.15, // More than 15cm lower than neighbors
+      nearest_neighbor_distance_m: Math.round(neighbors[0]?.distance_km * 1000 || 0),
+    };
+  });
+}
+
 // ── Weekly AI Analysis (Sunday 6 AM) ───────────────────────
 async function runAIAnalysis() {
   console.log('[AI] Starting weekly infrastructure analysis...');
@@ -161,18 +216,24 @@ async function runAIAnalysis() {
   try {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
 
-    const { data: events } = await supabase
-      .from('flood_events')
-      .select('*, devices(device_id, name, lat, lng, neighborhood, altitude_baro)')
-      .gte('started_at', thirtyDaysAgo);
+    const [eventsRes, devicesRes] = await Promise.all([
+      supabase
+        .from('flood_events')
+        .select('*, devices(device_id, name, lat, lng, neighborhood, altitude_baro)')
+        .gte('started_at', thirtyDaysAgo),
+      supabase.from('devices').select('*'),
+    ]);
+
+    const events = eventsRes.data;
+    const allDevices = devicesRes.data;
 
     if (!events || events.length === 0) {
       console.log('[AI] No flood events in last 30 days — skipping analysis.');
       return;
     }
 
-    // Summarize for the prompt
-    const summary = events.map((e) => ({
+    // Build event summary
+    const eventSummary = events.map((e) => ({
       device: e.device_id,
       name: e.devices?.name,
       neighborhood: e.devices?.neighborhood,
@@ -187,37 +248,83 @@ async function runAIAnalysis() {
       tide_m: e.tide_level_m,
     }));
 
+    // Analyze elevation gradients to find road dips
+    const gradients = analyzeElevationGradients(allDevices || []);
+    const dips = gradients.filter((g) => g.is_dip);
+
+    // Get current weather context
+    const weather = await getWeatherConditions(25.9565, -80.1392);
+
+    // Count floods per device for frequency analysis
+    const floodFrequency = {};
+    events.forEach((e) => {
+      if (!floodFrequency[e.device_id]) {
+        floodFrequency[e.device_id] = {
+          count: 0, totalDepth: 0, totalDuration: 0,
+          device: e.devices,
+        };
+      }
+      floodFrequency[e.device_id].count++;
+      floodFrequency[e.device_id].totalDepth += e.peak_depth_cm;
+      floodFrequency[e.device_id].totalDuration += e.duration_minutes || 0;
+    });
+
     const anthropic = new Anthropic();
 
     const response = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 2000,
+      model: 'claude-sonnet-4-5-20250514',
+      max_tokens: 3000,
       messages: [{
         role: 'user',
-        content: `You are an urban flood infrastructure analyst for Aventura, Florida.
-Analyze the following flood event data from the last 30 days collected by IoT sensors mounted on mailboxes.
+        content: `You are an urban flood infrastructure analyst working with the city of Aventura, Florida.
+You have access to real sensor data from IoT devices mounted on mailboxes across the city.
 
-DATA:
-${JSON.stringify(summary, null, 2)}
+FLOOD EVENTS (last 30 days):
+${JSON.stringify(eventSummary, null, 2)}
 
-Return a JSON object (no markdown, raw JSON only) with this structure:
+FLOOD FREQUENCY PER SENSOR:
+${JSON.stringify(floodFrequency, null, 2)}
+
+ELEVATION GRADIENT ANALYSIS (identifies road dips where water pools):
+${JSON.stringify(gradients, null, 2)}
+
+IDENTIFIED ROAD DIPS (sensors lower than surrounding neighbors):
+${JSON.stringify(dips, null, 2)}
+
+CURRENT WEATHER CONDITIONS:
+${JSON.stringify(weather, null, 2)}
+
+Analyze this data and return a JSON object (no markdown, raw JSON only) with this structure:
 {
   "recommendations": [
     {
       "priority": "high" | "medium" | "low",
       "category": "drainage" | "elevation" | "barrier" | "other",
       "affected_devices": ["FF-001", "FF-003"],
-      "text": "Detailed recommendation with reasoning and estimated impact..."
+      "text": "Detailed recommendation..."
     }
   ]
 }
 
-Requirements:
+ANALYSIS REQUIREMENTS:
 1. Identify the top 5 locations with most frequent/severe flooding
-2. Analyze likely causes (low elevation, poor drainage, tidal influence, etc.)
-3. Suggest specific infrastructure improvements with reasoning
-4. Estimate impact if each improvement were made
-Limit to 5-8 recommendations.`,
+2. Cross-reference flood locations with elevation data:
+   - Which sensors sit in road dips (negative elevation_diff)?
+   - Do low-elevation sensors flood more often? Quantify the correlation.
+   - Which road segments slope toward flood-prone areas?
+3. Analyze NOAA data correlation:
+   - Do floods correlate with rainfall amounts? What threshold triggers flooding?
+   - Do tidal events compound flooding at low-elevation coastal sensors?
+   - Are certain sensors only affected during high-tide + rain combinations?
+4. Infrastructure recommendations must be SPECIFIC:
+   - For road dips: recommend catch basins, french drains, or road re-grading with exact locations
+   - For low elevation areas: recommend swales, retention ponds, or pump stations
+   - For tidal flooding: recommend backflow preventers or tide gates
+   - For drainage: recommend pipe upsizing or new outfall locations
+5. Estimate impact: "Would reduce flood frequency at [location] by approximately X%"
+6. Consider cost-effectiveness: prioritize improvements that help multiple sensors
+
+Limit to 5-8 recommendations, ordered by priority.`,
       }],
     });
 
@@ -226,7 +333,6 @@ Limit to 5-8 recommendations.`,
     try {
       parsed = JSON.parse(content);
     } catch {
-      // Try extracting JSON from potential markdown wrapping
       const match = content.match(/\{[\s\S]*\}/);
       parsed = match ? JSON.parse(match[0]) : null;
     }

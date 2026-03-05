@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Radio, AlertTriangle, Battery, Clock } from "lucide-react";
+import { Radio, AlertTriangle, Battery, Clock, CloudRain, Waves, Thermometer, Droplets } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
 import { getAllDevices, getActiveFloodEvents } from "@/lib/queries";
 import { StatCard } from "@/components/StatCard";
@@ -13,11 +13,21 @@ const DeviceMap = dynamic(
   { ssr: false }
 );
 
+interface WeatherData {
+  temperature: number | null;
+  humidity: number | null;
+  rainfallMm: number;
+  description: string;
+  tideLevel: number | null;
+  forecast: { name: string; shortForecast: string; rainChance: number | null }[];
+}
+
 export default function OverviewPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeEvents, setActiveEvents] = useState<FloodEvent[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+  const [weather, setWeather] = useState<WeatherData | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -39,25 +49,29 @@ export default function OverviewPage() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  // Realtime subscription for device changes
+  // Fetch weather
+  useEffect(() => {
+    async function loadWeather() {
+      try {
+        const res = await fetch("/api/weather");
+        if (res.ok) setWeather(await res.json());
+      } catch {
+        // weather is optional
+      }
+    }
+    loadWeather();
+    const interval = setInterval(loadWeather, 600000); // every 10 min
+    return () => clearInterval(interval);
+  }, []);
+
+  // Realtime subscription
   useEffect(() => {
     const channel = getSupabase()
       .channel("overview-devices")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "devices" },
-        () => fetchData()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "flood_events" },
-        () => fetchData()
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, () => fetchData())
+      .on("postgres_changes", { event: "*", schema: "public", table: "flood_events" }, () => fetchData())
       .subscribe();
-
-    return () => {
-      getSupabase().removeChannel(channel);
-    };
+    return () => { getSupabase().removeChannel(channel); };
   }, [fetchData]);
 
   const online = devices.filter((d) => d.status !== "offline").length;
@@ -66,6 +80,9 @@ export default function OverviewPage() {
     devices.length > 0
       ? (devices.reduce((s, d) => s + (d.battery_v ?? 0), 0) / devices.length).toFixed(1)
       : "N/A";
+
+  // Find upcoming rain risk from forecast
+  const rainForecast = weather?.forecast?.find((f) => (f.rainChance ?? 0) > 30);
 
   return (
     <div className="flex gap-6 h-[calc(100vh-48px)]">
@@ -83,37 +100,54 @@ export default function OverviewPage() {
         <h2 className="text-lg font-semibold">Live Overview</h2>
 
         <div className="grid grid-cols-2 gap-3">
-          <StatCard
-            label="Online"
-            value={online}
-            icon={<Radio size={16} />}
-            color="text-status-green"
-          />
-          <StatCard
-            label="Offline"
-            value={offline}
-            icon={<Radio size={16} />}
-            color={offline > 0 ? "text-status-red" : "text-text-secondary"}
-          />
-          <StatCard
-            label="Active Floods"
-            value={activeEvents.length}
-            icon={<AlertTriangle size={16} />}
-            color={activeEvents.length > 0 ? "text-status-red" : "text-status-green"}
-          />
-          <StatCard
-            label="Avg Battery"
-            value={`${avgBattery}V`}
-            icon={<Battery size={16} />}
-          />
+          <StatCard label="Online" value={online} icon={<Radio size={16} />} color="text-status-green" />
+          <StatCard label="Offline" value={offline} icon={<Radio size={16} />} color={offline > 0 ? "text-status-red" : "text-text-secondary"} />
+          <StatCard label="Active Floods" value={activeEvents.length} icon={<AlertTriangle size={16} />} color={activeEvents.length > 0 ? "text-status-red" : "text-status-green"} />
+          <StatCard label="Avg Battery" value={`${avgBattery}V`} icon={<Battery size={16} />} />
         </div>
 
-        {/* Active flood events list */}
+        {/* Weather panel */}
+        {weather && (
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <CloudRain size={14} /> Current Weather
+            </h3>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="flex items-center gap-2">
+                <Thermometer size={12} className="text-status-amber" />
+                <span>{weather.temperature != null ? `${weather.temperature}°F` : "—"}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Droplets size={12} className="text-status-blue" />
+                <span>{weather.humidity != null ? `${weather.humidity}%` : "—"}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CloudRain size={12} className="text-status-blue" />
+                <span>{weather.rainfallMm > 0 ? `${weather.rainfallMm}mm/hr` : "No rain"}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Waves size={12} className="text-status-green" />
+                <span>{weather.tideLevel != null ? `${weather.tideLevel.toFixed(2)}m` : "—"}</span>
+              </div>
+            </div>
+            <p className="text-xs text-text-secondary mt-2">{weather.description}</p>
+
+            {/* Rain alert */}
+            {rainForecast && (
+              <div className="mt-3 p-2 bg-status-amber/10 border border-status-amber/20 rounded text-xs">
+                <span className="text-status-amber font-medium">Rain expected: </span>
+                <span className="text-text-secondary">
+                  {rainForecast.name} — {rainForecast.shortForecast} ({rainForecast.rainChance}% chance)
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Active flood events */}
         {activeEvents.length > 0 && (
           <div className="bg-bg-card border border-border-card rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-status-red mb-3">
-              Active Flood Events
-            </h3>
+            <h3 className="text-sm font-semibold text-status-red mb-3">Active Flood Events</h3>
             <div className="space-y-2">
               {activeEvents.map((event) => (
                 <button
