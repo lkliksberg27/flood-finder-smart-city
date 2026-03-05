@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { Download } from "lucide-react";
 import { getAllFloodEvents, getNeighborhoods } from "@/lib/queries";
 import type { FloodEvent, Device } from "@/lib/types";
 
@@ -56,7 +57,15 @@ export default function FloodEventsPage() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-4">Flood Event History</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-semibold">Flood Event History</h2>
+        <button
+          onClick={() => window.open("/api/export/events", "_blank")}
+          className="flex items-center gap-2 px-4 py-2 bg-status-blue/20 text-status-blue rounded-lg hover:bg-status-blue/30 transition-colors text-sm"
+        >
+          <Download size={16} /> Export CSV
+        </button>
+      </div>
 
       {/* Stats row */}
       <div className="grid grid-cols-3 gap-4 mb-6">
