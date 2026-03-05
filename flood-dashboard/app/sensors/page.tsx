@@ -262,24 +262,28 @@ export default function SensorsPage() {
 
               if (expandedId !== d.device_id) return [mainRow];
 
-              // Build mini sparkline from readings
-              const sparklineValues = expandedReadings.map((r) => r.distance_cm ?? 0).reverse();
-              const sparklineSvg = sparklineValues.length >= 2 ? (() => {
+              // Build mini sparklines from readings
+              const distValues = expandedReadings.map((r) => r.distance_cm ?? 0).reverse();
+              const floodValues = expandedReadings.map((r) => r.flood_depth_cm).reverse();
+              const hasFloodData = floodValues.some((v) => v > 0);
+
+              function buildSparkline(values: number[], color: string) {
+                if (values.length < 2) return null;
                 const w = 200, h = 30;
-                const min = Math.min(...sparklineValues);
-                const max = Math.max(...sparklineValues);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
                 const range = max - min || 1;
-                const points = sparklineValues.map((v, i) => {
-                  const x = (i / (sparklineValues.length - 1)) * w;
+                const points = values.map((v, i) => {
+                  const x = (i / (values.length - 1)) * w;
                   const y = h - ((v - min) / range) * (h - 4) - 2;
                   return `${x},${y}`;
                 }).join(" ");
                 return (
                   <svg width={w} height={h} className="block">
-                    <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 );
-              })() : null;
+              }
 
               const expandRow = (
                 <tr key={`${d.device_id}-expand`}>
@@ -305,10 +309,16 @@ export default function SensorsPage() {
                         </div>
                       </div>
                       <div className="w-[220px] space-y-3">
-                        {sparklineSvg && (
+                        {distValues.length >= 2 && (
                           <div>
                             <p className="text-xs text-text-secondary mb-1">Distance Trend</p>
-                            {sparklineSvg}
+                            {buildSparkline(distValues, "#3b82f6")}
+                          </div>
+                        )}
+                        {hasFloodData && (
+                          <div>
+                            <p className="text-xs text-status-red mb-1">Flood Depth Trend</p>
+                            {buildSparkline(floodValues, "#f87171")}
                           </div>
                         )}
                         <div className="grid grid-cols-2 gap-2 text-xs">

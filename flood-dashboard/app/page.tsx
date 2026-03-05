@@ -289,6 +289,26 @@ export default function OverviewPage() {
           );
         })()}
 
+        {/* Data freshness */}
+        {devices.length > 0 && (() => {
+          const now = Date.now();
+          const within1h = devices.filter((d) => d.last_seen && now - new Date(d.last_seen).getTime() < 3600000).length;
+          const within10m = devices.filter((d) => d.last_seen && now - new Date(d.last_seen).getTime() < 600000).length;
+          return (
+            <div className="bg-bg-card border border-border-card rounded-lg p-3">
+              <p className="text-xs text-text-secondary mb-1.5">Data Freshness</p>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-secondary">Last 10 min</span>
+                <span className="text-status-green font-medium">{within10m}/{devices.length}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs mt-1">
+                <span className="text-text-secondary">Last 1 hour</span>
+                <span className={`font-medium ${within1h === devices.length ? "text-status-green" : "text-status-amber"}`}>{within1h}/{devices.length}</span>
+              </div>
+            </div>
+          );
+        })()}
+
         <div className="flex items-center gap-2 text-xs text-text-secondary mt-auto">
           <Clock size={12} />
           Updated {lastUpdated.toLocaleTimeString()}
