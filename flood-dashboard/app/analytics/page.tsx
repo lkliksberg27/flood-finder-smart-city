@@ -119,7 +119,38 @@ export default function AnalyticsPage() {
   const rainfallCorrelation = events.filter((e) => (e.rainfall_mm ?? 0) > 0).length;
   const compoundEvents = events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3).length;
 
-  // 8. Compound events breakdown
+  // 8. Neighborhood flood comparison
+  const neighborhoodData: Record<string, { events: number; avgDepth: number; sensors: number }> = {};
+  devices.forEach((d) => {
+    const n = d.neighborhood ?? "Unknown";
+    if (!neighborhoodData[n]) neighborhoodData[n] = { events: 0, avgDepth: 0, sensors: 0 };
+    neighborhoodData[n].sensors++;
+  });
+  events.forEach((e) => {
+    const dev = e.devices as Device | undefined;
+    const n = dev?.neighborhood ?? "Unknown";
+    if (!neighborhoodData[n]) neighborhoodData[n] = { events: 0, avgDepth: 0, sensors: 0 };
+    neighborhoodData[n].events++;
+    neighborhoodData[n].avgDepth += e.peak_depth_cm;
+  });
+  const neighborhoodChart = Object.entries(neighborhoodData)
+    .map(([name, d]) => ({
+      name: name.length > 12 ? name.slice(0, 12) + "..." : name,
+      events: d.events,
+      avgDepth: d.events > 0 ? Math.round(d.avgDepth / d.events) : 0,
+    }))
+    .sort((a, b) => b.events - a.events)
+    .slice(0, 8);
+
+  // 9. Duration vs depth scatter
+  const durationDepthData = events
+    .filter((e) => e.duration_minutes != null && e.duration_minutes > 0)
+    .map((e) => ({
+      duration: e.duration_minutes!,
+      depth: e.peak_depth_cm,
+    }));
+
+  // 10. Compound events breakdown
   const compoundBreakdown = [
     { type: "Rain Only", count: events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.blue },
     { type: "High Tide Only", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) > 0.3).length, color: CHART_COLORS.green },
@@ -161,6 +192,46 @@ export default function AnalyticsPage() {
           </p>
         </div>
       </div>
+
+      {/* Auto-generated insights */}
+      {totalEvents > 0 && (
+        <div className="bg-bg-card border border-border-card rounded-lg p-4 mb-6">
+          <h3 className="text-sm font-semibold mb-2">Key Insights</h3>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-text-secondary">
+            {(() => {
+              const insights: string[] = [];
+              // Worst neighborhood
+              const worstN = neighborhoodChart[0];
+              if (worstN) insights.push(`${worstN.name} has the most flood events (${worstN.events}) with avg depth ${worstN.avgDepth}cm`);
+              // Compound percentage
+              if (compoundEvents > 0) insights.push(`${Math.round((compoundEvents / totalEvents) * 100)}% of floods are compound events (rain + high tide simultaneously)`);
+              // Rain correlation
+              if (rainfallCorrelation > 0) insights.push(`${Math.round((rainfallCorrelation / totalEvents) * 100)}% of flood events correlate with measurable rainfall`);
+              // Peak hour
+              const peakHour = hourCounts.reduce((max, h) => h.count > max.count ? h : max, hourCounts[0]);
+              if (peakHour.count > 0) insights.push(`Most floods occur at ${peakHour.hour} — ${peakHour.count} events recorded at this hour`);
+              // Elevation correlation
+              const lowSensors = elevationFloodData.filter((d) => d.elevation < 1.0);
+              const highSensors = elevationFloodData.filter((d) => d.elevation >= 1.5);
+              if (lowSensors.length > 0 && highSensors.length > 0) {
+                const lowAvgFloods = lowSensors.reduce((s, d) => s + d.floods, 0) / lowSensors.length;
+                const highAvgFloods = highSensors.reduce((s, d) => s + d.floods, 0) / highSensors.length;
+                if (lowAvgFloods > highAvgFloods) insights.push(`Sensors below 1.0m elevation flood ${lowAvgFloods.toFixed(1)}x vs ${highAvgFloods.toFixed(1)}x for sensors above 1.5m`);
+              }
+              // Battery health
+              const lowBatt = devices.filter((d) => (d.battery_v ?? 4) < 3.3).length;
+              if (lowBatt > 0) insights.push(`${lowBatt} sensor${lowBatt > 1 ? "s" : ""} have low battery (<3.3V) — replace soon to avoid data gaps`);
+
+              return insights.map((insight, i) => (
+                <p key={i} className="py-1">
+                  <span className="text-status-blue mr-1.5">&#x2022;</span>
+                  {insight}
+                </p>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-6">
         {/* Weekly flood events */}
@@ -274,6 +345,40 @@ export default function AnalyticsPage() {
                 ))}
               </Bar>
             </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Neighborhood comparison */}
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <h3 className="text-sm font-semibold mb-1">Flooding by Neighborhood</h3>
+          <p className="text-xs text-text-secondary mb-3">Identifies areas needing city-wide infrastructure investment</p>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={neighborhoodChart}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+              <XAxis dataKey="name" tick={{ fill: "#9ca3af", fontSize: 9 }} angle={-20} textAnchor="end" height={40} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Bar dataKey="events" name="Flood Events" fill={CHART_COLORS.red} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Duration vs Depth */}
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <h3 className="text-sm font-semibold mb-1">Flood Duration vs Depth</h3>
+          <p className="text-xs text-text-secondary mb-3">Deeper floods tend to last longer — identifies persistent problem areas</p>
+          <ResponsiveContainer width="100%" height={250}>
+            <ScatterChart>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+              <XAxis dataKey="depth" name="Depth (cm)" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <YAxis dataKey="duration" name="Duration (min)" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Scatter data={durationDepthData} fill={CHART_COLORS.purple}>
+                {durationDepthData.map((d, i) => (
+                  <Cell key={i} fill={d.depth > 30 ? CHART_COLORS.red : d.depth > 10 ? CHART_COLORS.amber : CHART_COLORS.green} />
+                ))}
+              </Scatter>
+            </ScatterChart>
           </ResponsiveContainer>
         </div>
 
