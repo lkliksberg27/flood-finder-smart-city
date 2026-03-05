@@ -99,7 +99,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         html += buildSparklineSVG(distances, "#3b82f6", "24h Distance (cm)");
 
         // Show flood depth sparkline if any flooding detected
-        const floodDepths = readings.map((r) => (r as { flood_depth_cm?: number }).flood_depth_cm ?? 0);
+        const floodDepths = readings.map((r) => r.flood_depth_cm ?? 0);
         if (floodDepths.some((d) => d > 0)) {
           html += buildSparklineSVG(floodDepths, "#f87171", "24h Flood Depth (cm)");
         }

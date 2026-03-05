@@ -54,6 +54,10 @@ infrastructure improvements.
 - **Water flow visualization** — directional flow lines on elevation map showing drainage patterns
 - **Network health monitoring** — real-time fleet health percentage, stale sensor detection
 - **Fleet management** — battery monitoring, offline detection, CSV export for sensors and events
+- **Data freshness monitoring** — tracks sensor reporting recency (10min/1hr buckets)
+- **Per-page loading states** — professional loading spinners on all pages
+- **Supabase Realtime** — live updates on overview, sensors, flood events, and sidebar without page refresh
+- **Browser tab titles** — per-page metadata for easy tab management
 
 ## Folder Structure
 
@@ -90,11 +94,11 @@ flood-finder-smart-city/
 
 | Page | Description |
 |------|-------------|
-| **Overview** | Full-screen map with live sensor markers, weather panel (NOAA), 24h tide forecast sparkline, compound flood risk alerts, network health indicator, active flood events. Supabase realtime updates. |
-| **Sensors** | Fleet summary stats, sortable/filterable data table with flood counts, expandable rows with distance sparkline and detailed sensor info. CSV export with 30-day flood counts. |
-| **Flood Events** | Timeline with severity badges and COMPOUND event tags. Filters: neighborhood, severity, date range. Mini map for selected events. CSV export with all NOAA correlation data. |
+| **Overview** | Full-screen map with live sensor markers, weather panel (NOAA) with wind speed, 3-period forecast with rain probability, 24h tide forecast sparkline, compound flood risk alerts, network health indicator, data freshness panel, neighborhood quick-status, active flood events. Supabase realtime updates. |
+| **Sensors** | Fleet summary stats, sortable/filterable data table with flood counts, expandable rows with distance and flood depth sparklines and detailed sensor info. CSV export with 30-day flood counts. Realtime device status updates. |
+| **Flood Events** | Timeline with severity badges and COMPOUND event tags. Ongoing floods banner with pulsing elapsed time. Filters: neighborhood, severity, date range with clear button. Mini map for selected events. CSV export with all NOAA correlation data. Realtime updates. |
 | **Elevation** | Elevation heatmap with water flow direction lines between sensors. Road dip detection with red-bordered markers. Neighborhood summary panel with per-area flood counts and dip detection. |
-| **Analytics** | 9 charts: weekly trends, top flooding sensors, elevation vs flood frequency, depth vs rainfall, tide vs depth, time-of-day distribution, compound event breakdown, battery health. Summary stats row. |
+| **Analytics** | 10 charts: weekly trends, top flooding sensors, elevation vs flood frequency, depth vs rainfall, tide vs depth, time-of-day distribution, compound event breakdown, neighborhood comparison, duration vs depth, battery health. Auto-generated Key Insights panel with trend analysis. Summary stats row. |
 | **AI Analysis** | On-demand Claude analysis with executive summary. Cross-references elevation gradients, water flow direction, NOAA data, flood frequency, risk scores, compound events. Titled recommendations with priority, category, cost estimate, and flood reduction percentage. |
 
 ## AI Analysis Engine

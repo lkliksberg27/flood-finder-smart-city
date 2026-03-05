@@ -33,11 +33,11 @@ export async function getLatestReadings(deviceId: string, limit = 10): Promise<S
   return data ?? [];
 }
 
-export async function getReadings24h(deviceId: string): Promise<Pick<SensorReading, 'distance_cm' | 'recorded_at'>[]> {
+export async function getReadings24h(deviceId: string): Promise<Pick<SensorReading, 'distance_cm' | 'flood_depth_cm' | 'recorded_at'>[]> {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const { data, error } = await getSupabase()
     .from('sensor_readings')
-    .select('distance_cm, recorded_at')
+    .select('distance_cm, flood_depth_cm, recorded_at')
     .eq('device_id', deviceId)
     .gte('recorded_at', since)
     .order('recorded_at');
