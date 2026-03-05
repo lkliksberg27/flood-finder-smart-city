@@ -255,76 +255,77 @@ async function runAIAnalysis() {
     // Get current weather context
     const weather = await getWeatherConditions(25.9565, -80.1392);
 
-    // Count floods per device for frequency analysis
-    const floodFrequency = {};
+    // Build per-sensor flood profiles with multi-source correlation
+    const sensorProfiles = {};
     events.forEach((e) => {
-      if (!floodFrequency[e.device_id]) {
-        floodFrequency[e.device_id] = {
-          count: 0, totalDepth: 0, totalDuration: 0,
+      if (!sensorProfiles[e.device_id]) {
+        sensorProfiles[e.device_id] = {
+          count: 0, avgDepthCm: 0, maxDepthCm: 0,
+          totalDurationMin: 0, rainfallEvents: 0,
+          avgRainfallMm: 0, tidalEvents: 0, compoundEvents: 0,
           device: e.devices,
         };
       }
-      floodFrequency[e.device_id].count++;
-      floodFrequency[e.device_id].totalDepth += e.peak_depth_cm;
-      floodFrequency[e.device_id].totalDuration += e.duration_minutes || 0;
+      const p = sensorProfiles[e.device_id];
+      p.count++;
+      p.avgDepthCm += e.peak_depth_cm;
+      p.maxDepthCm = Math.max(p.maxDepthCm, e.peak_depth_cm);
+      p.totalDurationMin += e.duration_minutes || 0;
+      if (e.rainfall_mm > 0) { p.rainfallEvents++; p.avgRainfallMm += e.rainfall_mm; }
+      if (e.tide_level_m > 0.3) p.tidalEvents++;
+      if (e.rainfall_mm > 0 && e.tide_level_m > 0.3) p.compoundEvents++;
+    });
+    Object.values(sensorProfiles).forEach((p) => {
+      p.avgDepthCm = Math.round(p.avgDepthCm / p.count);
+      if (p.rainfallEvents > 0) p.avgRainfallMm = +(p.avgRainfallMm / p.rainfallEvents).toFixed(1);
+    });
+
+    // Neighborhood aggregation
+    const neighborhoodStats = {};
+    (allDevices || []).forEach((d) => {
+      const n = d.neighborhood || 'Unknown';
+      if (!neighborhoodStats[n]) neighborhoodStats[n] = { totalEvents: 0, avgElevation: 0, sensorCount: 0 };
+      neighborhoodStats[n].sensorCount++;
+      neighborhoodStats[n].avgElevation += d.altitude_baro || 0;
+    });
+    Object.entries(sensorProfiles).forEach(([, p]) => {
+      const n = p.device?.neighborhood || 'Unknown';
+      if (neighborhoodStats[n]) neighborhoodStats[n].totalEvents += p.count;
+    });
+    Object.values(neighborhoodStats).forEach((ns) => {
+      ns.avgElevation = +(ns.avgElevation / ns.sensorCount).toFixed(2);
     });
 
     const anthropic = new Anthropic();
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-5-20250514',
-      max_tokens: 3000,
+      max_tokens: 4000,
       messages: [{
         role: 'user',
-        content: `You are an urban flood infrastructure analyst working with the city of Aventura, Florida.
-You have access to real sensor data from IoT devices mounted on mailboxes across the city.
+        content: `You are a senior urban flood infrastructure engineer consulting for the City of Aventura, Florida.
+Analyzing ${(allDevices || []).length} IoT sensors with BMP390 altimeters, correlated with NOAA weather/tide data.
 
-FLOOD EVENTS (last 30 days):
-${JSON.stringify(eventSummary, null, 2)}
+SENSOR FLOOD PROFILES (30 days): ${JSON.stringify(sensorProfiles, null, 2)}
+ELEVATION GRADIENTS & ROAD DIPS: ${JSON.stringify(gradients, null, 2)}
+NEIGHBORHOOD STATS: ${JSON.stringify(neighborhoodStats, null, 2)}
+WEATHER CONTEXT: ${JSON.stringify(weather, null, 2)}
 
-FLOOD FREQUENCY PER SENSOR:
-${JSON.stringify(floodFrequency, null, 2)}
+Compound events (rain + high tide simultaneously): ${events.filter((e) => e.rainfall_mm > 0 && e.tide_level_m > 0.3).length} of ${events.length}
 
-ELEVATION GRADIENT ANALYSIS (identifies road dips where water pools):
-${JSON.stringify(gradients, null, 2)}
-
-IDENTIFIED ROAD DIPS (sensors lower than surrounding neighbors):
-${JSON.stringify(dips, null, 2)}
-
-CURRENT WEATHER CONDITIONS:
-${JSON.stringify(weather, null, 2)}
-
-Analyze this data and return a JSON object (no markdown, raw JSON only) with this structure:
+Return raw JSON (no markdown):
 {
   "recommendations": [
     {
-      "priority": "high" | "medium" | "low",
-      "category": "drainage" | "elevation" | "barrier" | "other",
-      "affected_devices": ["FF-001", "FF-003"],
-      "text": "Detailed recommendation..."
+      "priority": "high"|"medium"|"low",
+      "category": "drainage"|"elevation"|"barrier"|"other",
+      "affected_devices": ["FF-001"],
+      "title": "Short title",
+      "text": "Multi-paragraph recommendation citing sensor IDs, depths, elevations, rainfall thresholds, and tide correlations. Include specific infrastructure (catch basins, french drains, re-grading, swales, pump stations, backflow preventers, pipe upsizing). Estimate flood reduction percentage and cost category (low $10K-50K, medium $50K-250K, high $250K-1M+)."
     }
   ]
 }
-
-ANALYSIS REQUIREMENTS:
-1. Identify the top 5 locations with most frequent/severe flooding
-2. Cross-reference flood locations with elevation data:
-   - Which sensors sit in road dips (negative elevation_diff)?
-   - Do low-elevation sensors flood more often? Quantify the correlation.
-   - Which road segments slope toward flood-prone areas?
-3. Analyze NOAA data correlation:
-   - Do floods correlate with rainfall amounts? What threshold triggers flooding?
-   - Do tidal events compound flooding at low-elevation coastal sensors?
-   - Are certain sensors only affected during high-tide + rain combinations?
-4. Infrastructure recommendations must be SPECIFIC:
-   - For road dips: recommend catch basins, french drains, or road re-grading with exact locations
-   - For low elevation areas: recommend swales, retention ponds, or pump stations
-   - For tidal flooding: recommend backflow preventers or tide gates
-   - For drainage: recommend pipe upsizing or new outfall locations
-5. Estimate impact: "Would reduce flood frequency at [location] by approximately X%"
-6. Consider cost-effectiveness: prioritize improvements that help multiple sensors
-
-Limit to 5-8 recommendations, ordered by priority.`,
+Generate 6-8 recommendations mixing ALL data sources for cross-referenced infrastructure insights.`,
       }],
     });
 
@@ -343,9 +344,12 @@ Limit to 5-8 recommendations, ordered by priority.`,
     }
 
     for (const rec of parsed.recommendations) {
+      const fullText = rec.title
+        ? `## ${rec.title}\n\n${rec.text}`
+        : rec.text;
       await supabase.from('infrastructure_recommendations').insert({
         analysis_period_days: 30,
-        recommendation_text: rec.text,
+        recommendation_text: fullText,
         affected_device_ids: rec.affected_devices || [],
         priority: rec.priority || 'medium',
         category: rec.category || 'other',
