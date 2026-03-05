@@ -23,7 +23,7 @@ export async function GET() {
       const dev = e.devices as { name: string | null; neighborhood: string | null; lat: number; lng: number; altitude_baro: number | null } | null;
       const severity = e.peak_depth_cm > 30 ? "high" : e.peak_depth_cm > 10 ? "medium" : "low";
       const compound = (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3 ? "yes" : "no";
-      return [
+      const fields = [
         e.id,
         e.device_id,
         dev?.name ?? "",
@@ -39,7 +39,11 @@ export async function GET() {
         e.rainfall_mm ?? "",
         e.tide_level_m ?? "",
         compound,
-      ].join(",");
+      ];
+      return fields.map((f) => {
+        const str = String(f);
+        return str.includes(",") || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
+      }).join(",");
     });
 
     const csv = [headers.join(","), ...rows].join("\n");

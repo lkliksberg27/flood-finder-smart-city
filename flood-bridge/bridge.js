@@ -88,7 +88,7 @@ async function manageFloodEvent(deviceId, waterDetected, floodDepth) {
   // Find open event (no ended_at)
   const { data: openEvents } = await supabase
     .from('flood_events')
-    .select('id, peak_depth_cm')
+    .select('id, peak_depth_cm, started_at')
     .eq('device_id', deviceId)
     .is('ended_at', null)
     .limit(1);
@@ -129,10 +129,12 @@ async function manageFloodEvent(deviceId, waterDetected, floodDepth) {
       console.log(`[EVENT] Flood started at ${deviceId} — depth=${floodDepth}cm rain=${rainfall}mm tide=${tide}m`);
     }
   } else if (openEvent) {
+    const endedAt = new Date().toISOString();
+    const durationMin = Math.round((new Date(endedAt).getTime() - new Date(openEvent.started_at).getTime()) / 60000);
     await supabase.from('flood_events')
-      .update({ ended_at: new Date().toISOString() })
+      .update({ ended_at: endedAt })
       .eq('id', openEvent.id);
-    console.log(`[EVENT] Flood ended at ${deviceId}`);
+    console.log(`[EVENT] Flood ended at ${deviceId} — lasted ${durationMin} min`);
   }
 }
 

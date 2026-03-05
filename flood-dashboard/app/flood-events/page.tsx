@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Download } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
+import { getSupabase } from "@/lib/supabase";
 import { getAllFloodEvents, getNeighborhoods } from "@/lib/queries";
 import type { FloodEvent, Device } from "@/lib/types";
 
@@ -27,11 +28,34 @@ export default function FloodEventsPage() {
   const [filterEndDate, setFilterEndDate] = useState("");
   const [filterSeverity, setFilterSeverity] = useState<Severity>("");
   const [selectedEvent, setSelectedEvent] = useState<FloodEvent | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchEvents = useCallback(async () => {
+    try {
+      const [evts, hoods] = await Promise.all([
+        getAllFloodEvents(500),
+        getNeighborhoods(),
+      ]);
+      setEvents(evts);
+      setNeighborhoods(hoods);
+      setLoading(false);
+    } catch (err) {
+      console.error("Failed to load flood events:", err);
+    }
+  }, []);
 
   useEffect(() => {
-    getAllFloodEvents(500).then(setEvents).catch(console.error);
-    getNeighborhoods().then(setNeighborhoods).catch(console.error);
-  }, []);
+    fetchEvents();
+  }, [fetchEvents]);
+
+  // Realtime subscription for live flood event updates
+  useEffect(() => {
+    const channel = getSupabase()
+      .channel("flood-events-page")
+      .on("postgres_changes", { event: "*", schema: "public", table: "flood_events" }, () => fetchEvents())
+      .subscribe();
+    return () => { getSupabase().removeChannel(channel); };
+  }, [fetchEvents]);
 
   const filtered = events.filter((e) => {
     if (filterNeighborhood && (e.devices as Device | undefined)?.neighborhood !== filterNeighborhood) return false;
@@ -55,6 +79,17 @@ export default function FloodEventsPage() {
   thisMonth.forEach((e) => { deviceCounts[e.device_id] = (deviceCounts[e.device_id] || 0) + 1; });
   const worstDevice = Object.entries(deviceCounts).sort((a, b) => b[1] - a[1])[0];
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
+          <p className="text-sm text-text-secondary">Loading flood event history...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -68,7 +103,7 @@ export default function FloodEventsPage() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <p className="text-xs text-text-secondary uppercase">Events This Month</p>
           <p className="text-2xl font-bold text-status-amber mt-1">{thisMonth.length}</p>
@@ -76,6 +111,12 @@ export default function FloodEventsPage() {
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <p className="text-xs text-text-secondary uppercase">Avg Duration</p>
           <p className="text-2xl font-bold mt-1">{avgDuration} min</p>
+        </div>
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <p className="text-xs text-text-secondary uppercase">Compound Events</p>
+          <p className="text-2xl font-bold text-status-red mt-1">
+            {thisMonth.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3).length}
+          </p>
         </div>
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <p className="text-xs text-text-secondary uppercase">Worst Location</p>
@@ -95,8 +136,36 @@ export default function FloodEventsPage() {
         </div>
       )}
 
+      {/* Ongoing floods banner */}
+      {(() => {
+        const ongoing = events.filter((e) => !e.ended_at);
+        if (ongoing.length === 0) return null;
+        return (
+          <div className="mb-4 p-3 bg-status-red/10 border border-status-red/20 rounded-lg">
+            <p className="text-sm font-medium text-status-red mb-2">
+              {ongoing.length} Ongoing Flood{ongoing.length > 1 ? "s" : ""} Right Now
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              {ongoing.map((e) => {
+                const dev = e.devices as Device | undefined;
+                return (
+                  <button
+                    key={e.id}
+                    onClick={() => setSelectedEvent(e)}
+                    className="px-3 py-1 bg-status-red/20 rounded text-xs font-mono hover:bg-status-red/30 transition-colors"
+                  >
+                    {e.device_id} — {e.peak_depth_cm}cm
+                    {dev?.neighborhood && <span className="text-text-secondary ml-1">({dev.neighborhood})</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Filters */}
-      <div className="flex gap-3 mb-4 flex-wrap">
+      <div className="flex gap-3 mb-4 flex-wrap items-center">
         <select
           value={filterNeighborhood}
           onChange={(e) => setFilterNeighborhood(e.target.value)}
@@ -131,6 +200,14 @@ export default function FloodEventsPage() {
           className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
           placeholder="End date"
         />
+        {(filterNeighborhood || filterSeverity || filterStartDate || filterEndDate) && (
+          <button
+            onClick={() => { setFilterNeighborhood(""); setFilterSeverity(""); setFilterStartDate(""); setFilterEndDate(""); }}
+            className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Events table */}

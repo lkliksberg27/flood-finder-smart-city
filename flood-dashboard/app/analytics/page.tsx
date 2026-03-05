@@ -6,6 +6,7 @@ import {
   ScatterChart, Scatter, LineChart, Line,
   ResponsiveContainer, Cell, Legend,
 } from "recharts";
+import { Loader2 } from "lucide-react";
 import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, FloodEvent } from "@/lib/types";
 
@@ -28,11 +29,14 @@ export default function AnalyticsPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [events, setEvents] = useState<FloodEvent[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getAllDevices().then(setDevices).catch(console.error);
-    getAllFloodEvents(1000).then(setEvents).catch(console.error);
-    getFloodEventCount30d().then(setFloodCounts).catch(console.error);
+    Promise.all([
+      getAllDevices().then(setDevices),
+      getAllFloodEvents(1000).then(setEvents),
+      getFloodEventCount30d().then(setFloodCounts),
+    ]).catch(console.error).finally(() => setLoading(false));
   }, []);
 
   // 1. Flood events per week (last 6 months)
@@ -158,6 +162,17 @@ export default function AnalyticsPage() {
     { type: "Neither", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.amber },
   ];
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
+          <p className="text-sm text-text-secondary">Crunching flood data...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <h2 className="text-xl font-semibold mb-2">Analytics & Patterns</h2>
@@ -218,6 +233,31 @@ export default function AnalyticsPage() {
                 const highAvgFloods = highSensors.reduce((s, d) => s + d.floods, 0) / highSensors.length;
                 if (lowAvgFloods > highAvgFloods) insights.push(`Sensors below 1.0m elevation flood ${lowAvgFloods.toFixed(1)}x vs ${highAvgFloods.toFixed(1)}x for sensors above 1.5m`);
               }
+              // Trend analysis — compare first half vs second half of data
+              const sorted = [...events].sort((a, b) => a.started_at.localeCompare(b.started_at));
+              const mid = Math.floor(sorted.length / 2);
+              if (sorted.length >= 10) {
+                const firstHalf = sorted.slice(0, mid);
+                const secondHalf = sorted.slice(mid);
+                const firstAvgDepth = firstHalf.reduce((s, e) => s + e.peak_depth_cm, 0) / firstHalf.length;
+                const secondAvgDepth = secondHalf.reduce((s, e) => s + e.peak_depth_cm, 0) / secondHalf.length;
+                const changePct = Math.round(((secondAvgDepth - firstAvgDepth) / firstAvgDepth) * 100);
+                if (Math.abs(changePct) > 10) {
+                  insights.push(changePct > 0
+                    ? `Flood severity is increasing — avg depth rose ${changePct}% in recent events compared to earlier data`
+                    : `Flood severity is decreasing — avg depth dropped ${Math.abs(changePct)}% in recent events`
+                  );
+                }
+              }
+              // Worst time of day
+              const afternoonFloods = hourCounts.slice(12, 17).reduce((s, h) => s + h.count, 0);
+              const morningFloods = hourCounts.slice(6, 12).reduce((s, h) => s + h.count, 0);
+              if (afternoonFloods > morningFloods * 1.5 && afternoonFloods > 5) {
+                insights.push(`Afternoon floods (12-5pm) outnumber morning floods ${afternoonFloods} to ${morningFloods} — likely driven by daily rain pattern`);
+              }
+              // Severity distribution
+              const highSeverity = events.filter((e) => e.peak_depth_cm > 30).length;
+              if (highSeverity > 0) insights.push(`${highSeverity} events (${Math.round((highSeverity / totalEvents) * 100)}%) reached HIGH severity (>30cm) — these pose road safety risks`);
               // Battery health
               const lowBatt = devices.filter((d) => (d.battery_v ?? 4) < 3.3).length;
               if (lowBatt > 0) insights.push(`${lowBatt} sensor${lowBatt > 1 ? "s" : ""} have low battery (<3.3V) — replace soon to avoid data gaps`);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { BrainCircuit, Loader2, TrendingDown, DollarSign, MapPin } from "lucide-react";
+import { BrainCircuit, Loader2, TrendingDown, DollarSign, MapPin, Clock } from "lucide-react";
 import { getRecommendations, getAllDevices } from "@/lib/queries";
 import type { Recommendation, Device } from "@/lib/types";
 
@@ -247,13 +247,24 @@ export default function AIRecommendationsPage() {
         </div>
       ))}
 
+      {/* Last analysis timestamp */}
+      {recommendations.length > 0 && (
+        <div className="flex items-center gap-2 text-xs text-text-secondary mt-2">
+          <Clock size={12} />
+          Last analysis: {new Date(recommendations[0].generated_at).toLocaleString()}
+          <span className="text-text-secondary/50">•</span>
+          {recommendations.length} total recommendation{recommendations.length !== 1 ? "s" : ""} across {Object.keys(grouped).length} analysis run{Object.keys(grouped).length !== 1 ? "s" : ""}
+        </div>
+      )}
+
       {recommendations.length === 0 && !loading && (
         <div className="text-center py-16 text-text-secondary">
           <BrainCircuit size={56} className="mx-auto mb-4 opacity-20" />
           <p className="text-lg mb-2">No analyses yet</p>
-          <p className="text-sm">
-            Click &quot;Run New Analysis&quot; to analyze all sensor data, NOAA weather patterns,
-            elevation gradients, and flood events from the last 30 days.
+          <p className="text-sm max-w-md mx-auto">
+            Click &quot;Run New Analysis&quot; to have Claude analyze all sensor data, NOAA weather patterns,
+            elevation gradients, water flow direction, compound events, and flood history from the last 30 days.
+            The AI will generate specific infrastructure recommendations with cost estimates and flood reduction projections.
           </p>
         </div>
       )}

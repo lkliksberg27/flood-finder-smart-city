@@ -112,15 +112,31 @@ export function ElevationMap({ devices, showOverlay }: Props) {
       }).addTo(mapRef.current!);
 
       marker.bindPopup(`
-        <div style="font-family:'DM Sans',sans-serif">
-          <strong>${d.device_id}</strong>${isDip ? ' <span style="color:#f87171">(Road Dip)</span>' : ''}<br/>
-          Elevation: <strong>${d.altitude_baro!.toFixed(2)}m</strong><br/>
-          ${isDip ? `<span style="color:#f87171">${Math.round((avgNeighborElev - d.altitude_baro!) * 100)}cm below neighbors</span><br/>` : ''}
-          ${d.neighborhood ? `Area: ${d.neighborhood}` : ""}
+        <div style="font-family:'DM Sans',sans-serif;min-width:160px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <strong>${d.device_id}</strong>
+            ${isDip ? '<span style="font-size:10px;color:#f87171;background:rgba(248,113,113,0.15);padding:1px 6px;border-radius:4px;font-weight:600">ROAD DIP</span>' : ''}
+          </div>
+          ${d.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${d.name}</div>` : ''}
+          <hr style="border-color:#1f2937;margin:6px 0"/>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">
+            <div><span style="color:#6b7280">Elevation</span><br/><strong>${d.altitude_baro!.toFixed(2)}m</strong></div>
+            <div><span style="color:#6b7280">Avg Neighbors</span><br/><strong>${avgNeighborElev.toFixed(2)}m</strong></div>
+          </div>
+          ${isDip ? `<div style="margin-top:6px;font-size:11px;color:#f87171;font-weight:600">${Math.round((avgNeighborElev - d.altitude_baro!) * 100)}cm below surrounding road level</div>` : ''}
+          ${d.neighborhood ? `<div style="margin-top:4px;font-size:10px;color:#6b7280">${d.neighborhood}</div>` : ''}
         </div>
       `);
       overlayRef.current.push(marker);
     });
+
+    // Auto-fit map to show all sensors
+    if (withElev.length > 1 && mapRef.current.getZoom() === 14) {
+      const bounds = L.latLngBounds(withElev.map((d) => [d.lat, d.lng]));
+      if (bounds.isValid()) {
+        mapRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+      }
+    }
   }, [devices, showOverlay]);
 
   return (

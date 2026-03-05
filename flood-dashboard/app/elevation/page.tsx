@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { getAllDevices, getFloodEventCount30d } from "@/lib/queries";
 import type { Device } from "@/lib/types";
 
@@ -63,10 +63,13 @@ export default function ElevationPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [showOverlay, setShowOverlay] = useState(true);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getAllDevices().then(setDevices).catch(console.error);
-    getFloodEventCount30d().then(setFloodCounts).catch(console.error);
+    Promise.all([
+      getAllDevices().then(setDevices),
+      getFloodEventCount30d().then(setFloodCounts),
+    ]).catch(console.error).finally(() => setLoading(false));
   }, []);
 
   const sorted = [...devices]
@@ -75,6 +78,17 @@ export default function ElevationPage() {
     .slice(0, 10);
 
   const dips = analyzeRoadDips(devices, floodCounts);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
+          <p className="text-sm text-text-secondary">Loading elevation data...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -218,6 +232,44 @@ export default function ElevationPage() {
                 </div>
               </div>
             ) : null;
+          })()}
+
+          {/* Elevation summary stats */}
+          {(() => {
+            const withElev = devices.filter((d) => d.altitude_baro != null);
+            if (withElev.length === 0) return null;
+            const elevs = withElev.map((d) => d.altitude_baro!);
+            const minElev = Math.min(...elevs);
+            const maxElev = Math.max(...elevs);
+            const avgElev = elevs.reduce((s, e) => s + e, 0) / elevs.length;
+            const belowSeaLevel = withElev.filter((d) => d.altitude_baro! < 0.5).length;
+            return (
+              <div className="bg-bg-card border border-border-card rounded-lg p-4">
+                <h3 className="text-sm font-semibold mb-3">Elevation Summary</h3>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <p className="text-text-secondary">Range</p>
+                    <p className="font-medium">{minElev.toFixed(2)}m — {maxElev.toFixed(2)}m</p>
+                  </div>
+                  <div>
+                    <p className="text-text-secondary">Average</p>
+                    <p className="font-medium">{avgElev.toFixed(2)}m NAVD88</p>
+                  </div>
+                  <div>
+                    <p className="text-text-secondary">Road Dips</p>
+                    <p className={`font-medium ${dips.length > 0 ? "text-status-red" : "text-status-green"}`}>
+                      {dips.length} detected
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-text-secondary">Low Risk (&lt;0.5m)</p>
+                    <p className={`font-medium ${belowSeaLevel > 0 ? "text-status-amber" : "text-status-green"}`}>
+                      {belowSeaLevel} sensors
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
           })()}
 
           {/* Legend */}

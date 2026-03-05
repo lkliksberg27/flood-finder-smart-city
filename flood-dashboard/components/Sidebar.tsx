@@ -25,21 +25,39 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const [sensorCount, setSensorCount] = useState<number | null>(null);
+  const [activeAlerts, setActiveAlerts] = useState(0);
 
   useEffect(() => {
     async function fetchCount() {
       try {
-        const { count } = await getSupabase()
-          .from("devices")
-          .select("device_id", { count: "exact", head: true });
+        const [{ count }, alertRes] = await Promise.all([
+          getSupabase()
+            .from("devices")
+            .select("device_id", { count: "exact", head: true }),
+          getSupabase()
+            .from("flood_events")
+            .select("id", { count: "exact", head: true })
+            .is("ended_at", null),
+        ]);
         setSensorCount(count ?? 0);
+        setActiveAlerts(alertRes.count ?? 0);
       } catch {
         setSensorCount(null);
       }
     }
     fetchCount();
     const interval = setInterval(fetchCount, 30000);
-    return () => clearInterval(interval);
+
+    // Realtime for flood events
+    const channel = getSupabase()
+      .channel("sidebar-alerts")
+      .on("postgres_changes", { event: "*", schema: "public", table: "flood_events" }, () => fetchCount())
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      getSupabase().removeChannel(channel);
+    };
   }, []);
 
   return (
@@ -66,19 +84,31 @@ export function Sidebar() {
             >
               <Icon size={18} />
               {label}
+              {label === "Flood Events" && activeAlerts > 0 && (
+                <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-status-red text-white rounded-full leading-none">
+                  {activeAlerts}
+                </span>
+              )}
             </Link>
           );
         })}
       </nav>
 
       <div className="p-4 border-t border-border-card">
-        <p className="text-xs text-text-secondary">
-          Connected to{" "}
-          <span className="text-status-green font-medium">
-            {sensorCount !== null ? sensorCount : "..."}
-          </span>{" "}
-          sensors
-        </p>
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full ${sensorCount !== null ? "bg-status-green" : "bg-gray-500"}`} />
+          <p className="text-xs text-text-secondary">
+            <span className="text-status-green font-medium">
+              {sensorCount !== null ? sensorCount : "..."}
+            </span>{" "}
+            sensors connected
+          </p>
+        </div>
+        {activeAlerts > 0 && (
+          <p className="text-xs text-status-red mt-1 font-medium">
+            {activeAlerts} active flood{activeAlerts > 1 ? "s" : ""}
+          </p>
+        )}
         <p className="text-xs text-text-secondary mt-1">Aventura, FL</p>
       </div>
     </aside>
