@@ -68,12 +68,15 @@ export default function AIRecommendationsPage() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [selectedRec, setSelectedRec] = useState<Recommendation | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    getRecommendations().then(setRecommendations).catch(console.error);
-    getAllDevices().then(setDevices).catch(console.error);
+    Promise.all([
+      getRecommendations().then(setRecommendations),
+      getAllDevices().then(setDevices),
+    ]).catch(console.error).finally(() => setInitialLoading(false));
   }, []);
 
   const runAnalysis = async () => {
@@ -112,6 +115,17 @@ export default function AIRecommendationsPage() {
     acc[r.category] = (acc[r.category] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  if (initialLoading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
+          <p className="text-sm text-text-secondary">Loading AI analysis...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
