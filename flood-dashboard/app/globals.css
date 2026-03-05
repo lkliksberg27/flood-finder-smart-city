@@ -57,6 +57,24 @@ body {
   animation: pulse-alert 1.5s ease-in-out infinite;
 }
 
+/* Selection color */
+::selection {
+  background: rgba(59, 130, 246, 0.3);
+  color: var(--text-primary);
+}
+
+/* Focus visible for keyboard accessibility */
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Table row hover */
+tr {
+  transition: background-color 0.15s ease;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
@@ -67,4 +85,7 @@ body {
 ::-webkit-scrollbar-thumb {
   background: #374151;
   border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
 }
