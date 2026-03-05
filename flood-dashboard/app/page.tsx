@@ -209,6 +209,34 @@ export default function OverviewPage() {
           </div>
         )}
 
+        {/* Network health */}
+        {devices.length > 0 && (() => {
+          const staleCount = devices.filter((d) => {
+            if (!d.last_seen) return true;
+            return Date.now() - new Date(d.last_seen).getTime() > 2 * 3600 * 1000;
+          }).length;
+          const healthPct = Math.round(((devices.length - staleCount) / devices.length) * 100);
+          return (
+            <div className="bg-bg-card border border-border-card rounded-lg p-3">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="text-text-secondary">Network Health</span>
+                <span className={healthPct > 90 ? "text-status-green" : healthPct > 70 ? "text-status-amber" : "text-status-red"}>
+                  {healthPct}%
+                </span>
+              </div>
+              <div className="w-full h-1.5 bg-bg-primary rounded overflow-hidden">
+                <div
+                  className={`h-full rounded ${healthPct > 90 ? "bg-status-green" : healthPct > 70 ? "bg-status-amber" : "bg-status-red"}`}
+                  style={{ width: `${healthPct}%` }}
+                />
+              </div>
+              {staleCount > 0 && (
+                <p className="text-[10px] text-text-secondary mt-1">{staleCount} sensor{staleCount > 1 ? "s" : ""} offline &gt;2h</p>
+              )}
+            </div>
+          );
+        })()}
+
         <div className="flex items-center gap-2 text-xs text-text-secondary mt-auto">
           <Clock size={12} />
           Updated {lastUpdated.toLocaleTimeString()}
