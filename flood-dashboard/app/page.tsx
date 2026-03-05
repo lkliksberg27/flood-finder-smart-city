@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Radio, AlertTriangle, Battery, Clock, CloudRain, Waves, Thermometer, Droplets } from "lucide-react";
+import { Radio, AlertTriangle, Battery, Clock, CloudRain, Waves, Thermometer, Droplets, Loader2 } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
 import { getAllDevices, getActiveFloodEvents } from "@/lib/queries";
 import { StatCard } from "@/components/StatCard";
@@ -29,6 +29,7 @@ export default function OverviewPage() {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     try {
@@ -39,6 +40,7 @@ export default function OverviewPage() {
       setDevices(devs);
       setActiveEvents(events);
       setLastUpdated(new Date());
+      setInitialLoading(false);
     } catch (err) {
       console.error("Failed to fetch overview data:", err);
     }
@@ -84,6 +86,17 @@ export default function OverviewPage() {
 
   // Find upcoming rain risk from forecast
   const rainForecast = weather?.forecast?.find((f) => (f.rainChance ?? 0) > 30);
+
+  if (initialLoading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-48px)]">
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
+          <p className="text-sm text-text-secondary">Loading sensor network...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex gap-6 h-[calc(100vh-48px)]">
