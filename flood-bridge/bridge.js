@@ -470,8 +470,35 @@ Generate 6-8 recommendations mixing ALL data sources.`,
   }
 }
 
-// Run every Sunday at 6:00 AM
+// Run AI analysis every Sunday at 6:00 AM
 cron.schedule('0 6 * * 0', runAIAnalysis);
+
+// ── Stale device detection (every 30 minutes) ────────────────
+// Mark devices as offline if they haven't reported in 2+ hours
+async function checkStaleDevices() {
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+  const { data: staleDevices, error } = await supabase
+    .from('devices')
+    .select('device_id')
+    .neq('status', 'offline')
+    .lt('last_seen', twoHoursAgo);
+
+  if (error) {
+    console.error('[STALE] Error checking stale devices:', error.message);
+    return;
+  }
+
+  if (staleDevices && staleDevices.length > 0) {
+    for (const d of staleDevices) {
+      await supabase.from('devices')
+        .update({ status: 'offline' })
+        .eq('device_id', d.device_id);
+    }
+    console.log(`[STALE] Marked ${staleDevices.length} device(s) as offline: ${staleDevices.map((d) => d.device_id).join(', ')}`);
+  }
+}
+cron.schedule('*/30 * * * *', checkStaleDevices);
+checkStaleDevices(); // Run on startup
 
 // Export for on-demand use by dashboard API
 module.exports = { runAIAnalysis };
