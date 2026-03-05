@@ -1,0 +1,209 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Download, ChevronDown, ChevronUp } from "lucide-react";
+import { getAllDevices, getLatestReadings, getNeighborhoods } from "@/lib/queries";
+import type { Device, SensorReading } from "@/lib/types";
+
+export default function SensorsPage() {
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
+  const [filterNeighborhood, setFilterNeighborhood] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterLowBattery, setFilterLowBattery] = useState(false);
+  const [sortCol, setSortCol] = useState<keyof Device>("device_id");
+  const [sortAsc, setSortAsc] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedReadings, setExpandedReadings] = useState<SensorReading[]>([]);
+
+  useEffect(() => {
+    getAllDevices().then(setDevices).catch(console.error);
+    getNeighborhoods().then(setNeighborhoods).catch(console.error);
+  }, []);
+
+  const toggleSort = (col: keyof Device) => {
+    if (sortCol === col) setSortAsc(!sortAsc);
+    else { setSortCol(col); setSortAsc(true); }
+  };
+
+  const handleExpand = async (id: string) => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(id);
+    try {
+      const readings = await getLatestReadings(id, 10);
+      setExpandedReadings(readings);
+    } catch (err) {
+      console.error("Failed to load readings:", err);
+    }
+  };
+
+  const isOffline = (d: Device) => {
+    if (!d.last_seen) return true;
+    return Date.now() - new Date(d.last_seen).getTime() > 2 * 3600 * 1000;
+  };
+
+  let filtered = devices.filter((d) => {
+    if (filterNeighborhood && d.neighborhood !== filterNeighborhood) return false;
+    if (filterStatus && d.status !== filterStatus) return false;
+    if (filterLowBattery && (d.battery_v ?? 4) >= 3.3) return false;
+    return true;
+  });
+
+  filtered.sort((a, b) => {
+    const av = a[sortCol] ?? "";
+    const bv = b[sortCol] ?? "";
+    const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+    return sortAsc ? cmp : -cmp;
+  });
+
+  const exportCSV = () => {
+    window.open("/api/export/sensors", "_blank");
+  };
+
+  const SortIcon = ({ col }: { col: keyof Device }) =>
+    sortCol === col ? (sortAsc ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : null;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-semibold">Sensor Management</h2>
+        <button
+          onClick={exportCSV}
+          className="flex items-center gap-2 px-4 py-2 bg-status-blue/20 text-status-blue rounded-lg hover:bg-status-blue/30 transition-colors text-sm"
+        >
+          <Download size={16} /> Export CSV
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex gap-3 mb-4">
+        <select
+          value={filterNeighborhood}
+          onChange={(e) => setFilterNeighborhood(e.target.value)}
+          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
+        >
+          <option value="">All Neighborhoods</option>
+          {neighborhoods.map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
+        >
+          <option value="">All Statuses</option>
+          <option value="online">Online</option>
+          <option value="offline">Offline</option>
+          <option value="alert">Alert</option>
+        </select>
+        <label className="flex items-center gap-2 text-sm text-text-secondary">
+          <input
+            type="checkbox"
+            checked={filterLowBattery}
+            onChange={(e) => setFilterLowBattery(e.target.checked)}
+            className="accent-status-amber"
+          />
+          Low Battery (&lt;20%)
+        </label>
+      </div>
+
+      {/* Table */}
+      <div className="bg-bg-card border border-border-card rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border-card text-text-secondary text-left">
+              {([
+                ["device_id", "Device ID"],
+                ["name", "Name"],
+                ["neighborhood", "Neighborhood"],
+                ["status", "Status"],
+                ["battery_v", "Battery"],
+                ["last_seen", "Last Seen"],
+                ["altitude_baro", "Elevation"],
+              ] as [keyof Device, string][]).map(([col, label]) => (
+                <th
+                  key={col}
+                  className="px-4 py-3 cursor-pointer hover:text-text-primary select-none"
+                  onClick={() => toggleSort(col)}
+                >
+                  <span className="flex items-center gap-1">
+                    {label} <SortIcon col={col} />
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((d) => (
+              <>
+                <tr
+                  key={d.device_id}
+                  onClick={() => handleExpand(d.device_id)}
+                  className={`border-b border-border-card cursor-pointer transition-colors hover:bg-bg-card-hover ${
+                    isOffline(d) ? "bg-status-red/5" : ""
+                  }`}
+                >
+                  <td className="px-4 py-3 font-mono text-xs">{d.device_id}</td>
+                  <td className="px-4 py-3">{d.name ?? "—"}</td>
+                  <td className="px-4 py-3">{d.neighborhood ?? "—"}</td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      d.status === "online" ? "bg-status-green/20 text-status-green" :
+                      d.status === "alert" ? "bg-status-red/20 text-status-red" :
+                      "bg-gray-500/20 text-gray-400"
+                    }`}>
+                      {d.status.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={
+                      (d.battery_v ?? 4) < 3.3 ? "text-status-amber" : ""
+                    }>
+                      {d.battery_v?.toFixed(1) ?? "—"}V
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-text-secondary text-xs">
+                    {d.last_seen ? new Date(d.last_seen).toLocaleString() : "Never"}
+                  </td>
+                  <td className="px-4 py-3">{d.altitude_baro?.toFixed(1) ?? "—"}m</td>
+                </tr>
+                {expandedId === d.device_id && (
+                  <tr key={`${d.device_id}-expand`}>
+                    <td colSpan={7} className="px-4 py-3 bg-bg-primary">
+                      <p className="text-xs text-text-secondary mb-2">Last 10 Readings</p>
+                      <div className="grid grid-cols-5 gap-2 text-xs font-mono">
+                        <span className="text-text-secondary">Time</span>
+                        <span className="text-text-secondary">Distance</span>
+                        <span className="text-text-secondary">Flood Depth</span>
+                        <span className="text-text-secondary">Battery</span>
+                        <span className="text-text-secondary">RSSI</span>
+                        {expandedReadings.map((r) => (
+                          <>
+                            <span key={`${r.id}-t`}>{new Date(r.recorded_at).toLocaleTimeString()}</span>
+                            <span key={`${r.id}-d`}>{r.distance_cm}cm</span>
+                            <span key={`${r.id}-f`} className={r.flood_depth_cm > 0 ? "text-status-red" : ""}>
+                              {r.flood_depth_cm}cm
+                            </span>
+                            <span key={`${r.id}-b`}>{r.battery_v?.toFixed(1)}V</span>
+                            <span key={`${r.id}-r`}>{r.rssi}dBm</span>
+                          </>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
+            ))}
+          </tbody>
+        </table>
+        {filtered.length === 0 && (
+          <p className="text-center text-text-secondary py-8">No sensors match filters.</p>
+        )}
+      </div>
+    </div>
+  );
+}
