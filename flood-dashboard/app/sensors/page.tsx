@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Download, ChevronDown, ChevronUp } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { Download, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import { getSupabase } from "@/lib/supabase";
 import { getAllDevices, getLatestReadings, getNeighborhoods, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, SensorReading } from "@/lib/types";
 
@@ -16,12 +17,36 @@ export default function SensorsPage() {
   const [sortAsc, setSortAsc] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedReadings, setExpandedReadings] = useState<SensorReading[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [devs, hoods, counts] = await Promise.all([
+        getAllDevices(),
+        getNeighborhoods(),
+        getFloodEventCount30d(),
+      ]);
+      setDevices(devs);
+      setNeighborhoods(hoods);
+      setFloodCounts(counts);
+      setLoading(false);
+    } catch (err) {
+      console.error("Failed to load sensor data:", err);
+    }
+  }, []);
 
   useEffect(() => {
-    getAllDevices().then(setDevices).catch(console.error);
-    getNeighborhoods().then(setNeighborhoods).catch(console.error);
-    getFloodEventCount30d().then(setFloodCounts).catch(console.error);
-  }, []);
+    fetchData();
+  }, [fetchData]);
+
+  // Realtime updates when device status changes
+  useEffect(() => {
+    const channel = getSupabase()
+      .channel("sensors-page")
+      .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, () => fetchData())
+      .subscribe();
+    return () => { getSupabase().removeChannel(channel); };
+  }, [fetchData]);
 
   const toggleSort = (col: string) => {
     if (sortCol === col) setSortAsc(!sortAsc);
@@ -84,6 +109,17 @@ export default function SensorsPage() {
     ["altitude_baro", "Elevation"],
     ["flood_events_30d", "Floods (30d)"],
   ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
+          <p className="text-sm text-text-secondary">Loading sensor fleet...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

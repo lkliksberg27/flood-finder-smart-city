@@ -30,7 +30,7 @@ export async function GET() {
         const val = d[h as keyof typeof d];
         if (val == null) return "";
         const str = String(val);
-        return str.includes(",") ? `"${str}"` : str;
+        return str.includes(",") || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
       }).join(",")
     );
 

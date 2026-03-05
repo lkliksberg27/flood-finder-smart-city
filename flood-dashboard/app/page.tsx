@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Radio, AlertTriangle, Battery, Clock, CloudRain, Waves, Thermometer, Droplets, Loader2 } from "lucide-react";
+import { Radio, AlertTriangle, Battery, Clock, CloudRain, Waves, Thermometer, Droplets, Loader2, Wind } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
 import { getAllDevices, getActiveFloodEvents } from "@/lib/queries";
 import { StatCard } from "@/components/StatCard";
@@ -16,6 +16,7 @@ const DeviceMap = dynamic(
 interface WeatherData {
   temperature: number | null;
   humidity: number | null;
+  windSpeed: number | null;
   rainfallMm: number;
   description: string;
   tideLevel: number | null;
@@ -137,12 +138,18 @@ export default function OverviewPage() {
               </div>
               <div className="flex items-center gap-2">
                 <CloudRain size={12} className="text-status-blue" />
-                <span>{weather.rainfallMm > 0 ? `${weather.rainfallMm}mm/hr` : "No rain"}</span>
+                <span className={weather.rainfallMm > 0 ? "text-status-amber font-medium" : ""}>{weather.rainfallMm > 0 ? `${weather.rainfallMm}mm/hr` : "No rain"}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Waves size={12} className="text-status-green" />
-                <span>{weather.tideLevel != null ? `${weather.tideLevel.toFixed(2)}m` : "—"}</span>
+                <span className={(weather.tideLevel ?? 0) > 0.3 ? "text-status-amber font-medium" : ""}>{weather.tideLevel != null ? `${weather.tideLevel.toFixed(2)}m` : "—"}</span>
               </div>
+              {weather.windSpeed != null && (
+                <div className="flex items-center gap-2 col-span-2">
+                  <Wind size={12} className="text-text-secondary" />
+                  <span>{weather.windSpeed} mph</span>
+                </div>
+              )}
             </div>
             <p className="text-xs text-text-secondary mt-2">{weather.description}</p>
 

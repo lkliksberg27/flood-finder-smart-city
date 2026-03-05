@@ -82,7 +82,9 @@ function buildPayload(dev) {
     } else {
       // Bell-curve flood: peaks at 50% progress
       const intensity = Math.sin(progress * Math.PI);
-      const maxFloodDepth = 20 + Math.random() * 40; // 20-60cm flood
+      // Deeper floods for lower elevation sensors (more realistic)
+      const elevFactor = dev.altitudeBaro < 1.2 ? 1.5 : 1.0;
+      const maxFloodDepth = (20 + Math.random() * 40) * elevFactor; // 20-90cm flood
       distanceCm = Math.max(10, dev.baselineDistanceCm - Math.floor(intensity * maxFloodDepth));
     }
   } else {
@@ -112,12 +114,13 @@ function publishCycle() {
   console.log(`\n--- Cycle ${cycle} ---`);
 
   for (const dev of devices) {
-    // 15% chance non-flooding device starts flooding
-    if (!dev.flooding && Math.random() < 0.15) {
+    // Lower elevation sensors have higher flood probability (more realistic)
+    const floodChance = dev.altitudeBaro < 1.2 ? 0.20 : dev.altitudeBaro < 1.5 ? 0.12 : 0.06;
+    if (!dev.flooding && Math.random() < floodChance) {
       dev.flooding = true;
       dev.floodStart = Date.now();
-      dev.floodDuration = (180 + Math.random() * 300) * 1000; // 3-8 minutes
-      console.log(`[SIM] ${dev.deviceId} FLOOD STARTED (duration: ${Math.round(dev.floodDuration / 1000)}s)`);
+      dev.floodDuration = (180 + Math.random() * 420) * 1000; // 3-10 minutes
+      console.log(`[SIM] ${dev.deviceId} FLOOD STARTED (duration: ${Math.round(dev.floodDuration / 1000)}s, elev: ${dev.altitudeBaro.toFixed(2)}m)`);
     }
 
     const payload = buildPayload(dev);
