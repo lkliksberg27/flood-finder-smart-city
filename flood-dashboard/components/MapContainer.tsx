@@ -243,5 +243,36 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     }
   }, [devices, onDeviceClick, highlightDeviceId, loadPopupData]);
 
-  return <div ref={containerRef} style={{ height, width: "100%", borderRadius: "8px" }} />;
+  return (
+    <div style={{ position: "relative", height, width: "100%" }}>
+      <div ref={containerRef} style={{ height: "100%", width: "100%", borderRadius: "8px" }} />
+      {/* Map legend */}
+      <div style={{
+        position: "absolute",
+        bottom: 12,
+        left: 12,
+        background: "rgba(17,24,39,0.9)",
+        borderRadius: 8,
+        padding: "8px 12px",
+        fontSize: 11,
+        color: "#9ca3af",
+        zIndex: 1000,
+        backdropFilter: "blur(4px)",
+        border: "1px solid #1f2937",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#34d399", display: "inline-block" }} />
+          <span>Online</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#f87171", display: "inline-block" }} />
+          <span>Flood Alert</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#6b7280", display: "inline-block" }} />
+          <span>Offline</span>
+        </div>
+      </div>
+    </div>
+  );
 }
