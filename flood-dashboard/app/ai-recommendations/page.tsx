@@ -83,7 +83,7 @@ export default function AIRecommendationsPage() {
       const res = await fetch("/api/run-analysis", { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Analysis failed");
-      setAnalysisMessage(data.message);
+      setAnalysisMessage(data.summary ? `${data.message}\n\n${data.summary}` : data.message);
       const updated = await getRecommendations();
       setRecommendations(updated);
     } catch (err) {
@@ -133,7 +133,7 @@ export default function AIRecommendationsPage() {
       </div>
 
       {analysisMessage && (
-        <div className="mb-4 p-3 bg-status-green/10 border border-status-green/20 rounded-lg text-sm text-status-green">
+        <div className="mb-4 p-3 bg-status-green/10 border border-status-green/20 rounded-lg text-sm text-status-green whitespace-pre-wrap">
           {analysisMessage}
         </div>
       )}

@@ -117,6 +117,15 @@ export default function AnalyticsPage() {
     ? Math.round(events.reduce((s, e) => s + (e.duration_minutes ?? 0), 0) / totalEvents)
     : 0;
   const rainfallCorrelation = events.filter((e) => (e.rainfall_mm ?? 0) > 0).length;
+  const compoundEvents = events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3).length;
+
+  // 8. Compound events breakdown
+  const compoundBreakdown = [
+    { type: "Rain Only", count: events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.blue },
+    { type: "High Tide Only", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) > 0.3).length, color: CHART_COLORS.green },
+    { type: "Rain + Tide", count: compoundEvents, color: CHART_COLORS.red },
+    { type: "Neither", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.amber },
+  ];
 
   return (
     <div>
@@ -126,7 +135,7 @@ export default function AnalyticsPage() {
       </p>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-5 gap-4 mb-6">
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <p className="text-xs text-text-secondary uppercase">Total Events</p>
           <p className="text-2xl font-bold text-status-blue mt-1">{totalEvents}</p>
@@ -143,6 +152,12 @@ export default function AnalyticsPage() {
           <p className="text-xs text-text-secondary uppercase">Rain-Linked</p>
           <p className="text-2xl font-bold text-status-green mt-1">
             {totalEvents > 0 ? Math.round((rainfallCorrelation / totalEvents) * 100) : 0}%
+          </p>
+        </div>
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <p className="text-xs text-text-secondary uppercase">Compound Events</p>
+          <p className="text-2xl font-bold text-status-red mt-1">
+            {compoundEvents}
           </p>
         </div>
       </div>
@@ -243,10 +258,29 @@ export default function AnalyticsPage() {
           </ResponsiveContainer>
         </div>
 
+        {/* Compound events breakdown */}
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <h3 className="text-sm font-semibold mb-1">Flood Trigger Breakdown</h3>
+          <p className="text-xs text-text-secondary mb-3">Rain + high tide compound events cause the worst flooding</p>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={compoundBreakdown}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+              <XAxis dataKey="type" tick={{ fill: "#9ca3af", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Bar dataKey="count" name="Events" radius={[4, 4, 0, 0]}>
+                {compoundBreakdown.map((b, i) => (
+                  <Cell key={i} fill={b.color} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
         {/* Battery health */}
-        <div className="bg-bg-card border border-border-card rounded-lg p-4 col-span-2">
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <h3 className="text-sm font-semibold mb-4">Fleet Battery Health</h3>
-          <ResponsiveContainer width="100%" height={180}>
+          <ResponsiveContainer width="100%" height={250}>
             <BarChart data={batteryBuckets}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="label" tick={{ fill: "#9ca3af", fontSize: 12 }} />

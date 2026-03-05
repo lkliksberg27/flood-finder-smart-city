@@ -125,14 +125,17 @@ export default function FloodEventsPage() {
       </div>
 
       {/* Events table */}
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs text-text-secondary">{filtered.length} event{filtered.length !== 1 ? "s" : ""} shown</p>
+      </div>
       <div className="bg-bg-card border border-border-card rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border-card text-text-secondary text-left">
               <th className="px-4 py-3">Device</th>
               <th className="px-4 py-3">Location</th>
+              <th className="px-4 py-3">Severity</th>
               <th className="px-4 py-3">Started</th>
-              <th className="px-4 py-3">Ended</th>
               <th className="px-4 py-3">Duration</th>
               <th className="px-4 py-3">Peak Depth</th>
               <th className="px-4 py-3">Rainfall</th>
@@ -152,16 +155,30 @@ export default function FloodEventsPage() {
                 >
                   <td className="px-4 py-3 font-mono text-xs">{e.device_id}</td>
                   <td className="px-4 py-3 text-text-secondary">{dev?.neighborhood ?? "—"}</td>
-                  <td className="px-4 py-3">{new Date(e.started_at).toLocaleString()}</td>
                   <td className="px-4 py-3">
-                    {e.ended_at ? new Date(e.ended_at).toLocaleString() : (
-                      <span className="text-status-red">Ongoing</span>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      e.peak_depth_cm > 30 ? "bg-status-red/20 text-status-red" :
+                      e.peak_depth_cm > 10 ? "bg-status-amber/20 text-status-amber" :
+                      "bg-status-green/20 text-status-green"
+                    }`}>
+                      {e.peak_depth_cm > 30 ? "HIGH" : e.peak_depth_cm > 10 ? "MED" : "LOW"}
+                    </span>
+                    {(e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3 && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-status-red/10 text-status-red">
+                        COMPOUND
+                      </span>
                     )}
                   </td>
-                  <td className="px-4 py-3">{e.duration_minutes ? `${e.duration_minutes} min` : "—"}</td>
+                  <td className="px-4 py-3">{new Date(e.started_at).toLocaleString()}</td>
+                  <td className="px-4 py-3">
+                    {e.ended_at
+                      ? `${e.duration_minutes} min`
+                      : <span className="text-status-red">Ongoing</span>
+                    }
+                  </td>
                   <td className="px-4 py-3">
                     <span className={
-                      e.peak_depth_cm > 30 ? "text-status-red" :
+                      e.peak_depth_cm > 30 ? "text-status-red font-medium" :
                       e.peak_depth_cm > 10 ? "text-status-amber" : ""
                     }>
                       {e.peak_depth_cm}cm
