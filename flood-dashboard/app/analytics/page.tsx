@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ScatterChart, Scatter, LineChart, Line,
-  ResponsiveContainer, Cell,
+  ResponsiveContainer, Cell, Legend,
 } from "recharts";
-import { getAllDevices, getAllFloodEvents } from "@/lib/queries";
+import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, FloodEvent } from "@/lib/types";
 
 const CHART_COLORS = {
@@ -14,15 +14,25 @@ const CHART_COLORS = {
   green: "#34d399",
   amber: "#fbbf24",
   red: "#f87171",
+  purple: "#a78bfa",
+};
+
+const tooltipStyle = {
+  background: "#111827",
+  border: "1px solid #1f2937",
+  borderRadius: 8,
+  color: "#f3f4f6",
 };
 
 export default function AnalyticsPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [events, setEvents] = useState<FloodEvent[]>([]);
+  const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     getAllDevices().then(setDevices).catch(console.error);
     getAllFloodEvents(1000).then(setEvents).catch(console.error);
+    getFloodEventCount30d().then(setFloodCounts).catch(console.error);
   }, []);
 
   // 1. Flood events per week (last 6 months)
@@ -80,9 +90,62 @@ export default function AnalyticsPage() {
     bucket.count++;
   });
 
+  // 6. NEW: Elevation vs Flood Frequency — shows correlation between low elevation and floods
+  const elevationFloodData = devices
+    .filter((d) => d.altitude_baro != null)
+    .map((d) => ({
+      device: d.device_id,
+      elevation: parseFloat((d.altitude_baro ?? 0).toFixed(2)),
+      floods: floodCounts[d.device_id] ?? 0,
+    }))
+    .sort((a, b) => a.elevation - b.elevation);
+
+  // 7. NEW: Tide level vs flood depth correlation
+  const tideFloodData = events
+    .filter((e) => e.tide_level_m != null)
+    .map((e) => ({
+      tide: parseFloat((e.tide_level_m ?? 0).toFixed(2)),
+      depth: e.peak_depth_cm,
+    }));
+
+  // Summary stats
+  const totalEvents = events.length;
+  const avgDepth = totalEvents > 0
+    ? Math.round(events.reduce((s, e) => s + e.peak_depth_cm, 0) / totalEvents)
+    : 0;
+  const avgDuration = totalEvents > 0
+    ? Math.round(events.reduce((s, e) => s + (e.duration_minutes ?? 0), 0) / totalEvents)
+    : 0;
+  const rainfallCorrelation = events.filter((e) => (e.rainfall_mm ?? 0) > 0).length;
+
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-6">Analytics & Patterns</h2>
+      <h2 className="text-xl font-semibold mb-2">Analytics & Patterns</h2>
+      <p className="text-sm text-text-secondary mb-6">
+        Data-driven flood pattern analysis across {devices.length} sensors
+      </p>
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <p className="text-xs text-text-secondary uppercase">Total Events</p>
+          <p className="text-2xl font-bold text-status-blue mt-1">{totalEvents}</p>
+        </div>
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <p className="text-xs text-text-secondary uppercase">Avg Depth</p>
+          <p className="text-2xl font-bold text-status-amber mt-1">{avgDepth}cm</p>
+        </div>
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <p className="text-xs text-text-secondary uppercase">Avg Duration</p>
+          <p className="text-2xl font-bold mt-1">{avgDuration} min</p>
+        </div>
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <p className="text-xs text-text-secondary uppercase">Rain-Linked</p>
+          <p className="text-2xl font-bold text-status-green mt-1">
+            {totalEvents > 0 ? Math.round((rainfallCorrelation / totalEvents) * 100) : 0}%
+          </p>
+        </div>
+      </div>
 
       <div className="grid grid-cols-2 gap-6">
         {/* Weekly flood events */}
@@ -93,7 +156,7 @@ export default function AnalyticsPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="week" tick={{ fill: "#9ca3af", fontSize: 11 }} />
               <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 8 }} />
+              <Tooltip contentStyle={tooltipStyle} />
               <Line type="monotone" dataKey="count" stroke={CHART_COLORS.blue} strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
@@ -107,22 +170,57 @@ export default function AnalyticsPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis type="number" tick={{ fill: "#9ca3af", fontSize: 11 }} />
               <YAxis dataKey="device" type="category" width={80} tick={{ fill: "#9ca3af", fontSize: 10 }} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 8 }} />
+              <Tooltip contentStyle={tooltipStyle} />
               <Bar dataKey="count" fill={CHART_COLORS.red} radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
+        {/* Elevation vs Flood Frequency — KEY INSIGHT */}
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <h3 className="text-sm font-semibold mb-1">Elevation vs Flood Frequency</h3>
+          <p className="text-xs text-text-secondary mb-3">Lower sensors flood more — identifies road dips</p>
+          <ResponsiveContainer width="100%" height={250}>
+            <ScatterChart>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+              <XAxis dataKey="elevation" name="Elevation (m)" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <YAxis dataKey="floods" name="Flood Events" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Scatter data={elevationFloodData} fill={CHART_COLORS.purple}>
+                {elevationFloodData.map((d, i) => (
+                  <Cell key={i} fill={d.floods > 3 ? CHART_COLORS.red : d.floods > 0 ? CHART_COLORS.amber : CHART_COLORS.green} />
+                ))}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+
         {/* Depth vs Rainfall scatter */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-4">Flood Depth vs Rainfall</h3>
+          <h3 className="text-sm font-semibold mb-1">Flood Depth vs Rainfall</h3>
+          <p className="text-xs text-text-secondary mb-3">NOAA rainfall data correlated with sensor depth</p>
           <ResponsiveContainer width="100%" height={250}>
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="rainfall" name="Rainfall (mm)" tick={{ fill: "#9ca3af", fontSize: 11 }} />
               <YAxis dataKey="depth" name="Depth (cm)" tick={{ fill: "#9ca3af", fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 8 }} />
+              <Tooltip contentStyle={tooltipStyle} />
               <Scatter data={scatterData} fill={CHART_COLORS.amber} />
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Tide vs Flood Depth */}
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <h3 className="text-sm font-semibold mb-1">Tide Level vs Flood Depth</h3>
+          <p className="text-xs text-text-secondary mb-3">NOAA tide data — high tides compound flooding</p>
+          <ResponsiveContainer width="100%" height={250}>
+            <ScatterChart>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+              <XAxis dataKey="tide" name="Tide Level (m)" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <YAxis dataKey="depth" name="Flood Depth (cm)" tick={{ fill: "#9ca3af", fontSize: 11 }} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Scatter data={tideFloodData} fill={CHART_COLORS.blue} />
             </ScatterChart>
           </ResponsiveContainer>
         </div>
@@ -135,7 +233,7 @@ export default function AnalyticsPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="hour" tick={{ fill: "#9ca3af", fontSize: 10 }} interval={2} />
               <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 8 }} />
+              <Tooltip contentStyle={tooltipStyle} />
               <Bar dataKey="count" fill={CHART_COLORS.blue}>
                 {hourCounts.map((entry, i) => (
                   <Cell key={i} fill={entry.count > 5 ? CHART_COLORS.red : CHART_COLORS.blue} />
@@ -147,14 +245,15 @@ export default function AnalyticsPage() {
 
         {/* Battery health */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4 col-span-2">
-          <h3 className="text-sm font-semibold mb-4">Battery Health Distribution</h3>
-          <ResponsiveContainer width="100%" height={200}>
+          <h3 className="text-sm font-semibold mb-4">Fleet Battery Health</h3>
+          <ResponsiveContainer width="100%" height={180}>
             <BarChart data={batteryBuckets}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="label" tick={{ fill: "#9ca3af", fontSize: 12 }} />
               <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #1f2937", borderRadius: 8 }} />
-              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+              <Tooltip contentStyle={tooltipStyle} />
+              <Legend />
+              <Bar dataKey="count" name="Sensors" radius={[4, 4, 0, 0]}>
                 {batteryBuckets.map((b, i) => (
                   <Cell key={i} fill={b.color} />
                 ))}
