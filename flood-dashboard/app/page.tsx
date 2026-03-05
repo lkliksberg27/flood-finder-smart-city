@@ -99,6 +99,21 @@ export default function OverviewPage() {
     );
   }
 
+  if (devices.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-48px)]">
+        <div className="text-center max-w-md">
+          <Radio size={48} className="mx-auto mb-4 text-text-secondary opacity-30" />
+          <h2 className="text-lg font-semibold mb-2">No Sensors Connected</h2>
+          <p className="text-sm text-text-secondary">
+            No devices found in the database. Run the simulator (<code className="text-status-blue">node simulate.js</code>) to seed test devices,
+            or add real sensors by inserting device records into Supabase and flashing the firmware.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex gap-6 h-[calc(100vh-48px)]">
       {/* Map */}

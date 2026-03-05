@@ -20,6 +20,7 @@
 
 #include <Wire.h>
 #include <EEPROM.h>
+#include <esp_task_wdt.h>
 #include <LoRa.h>
 #include <SSD1306Wire.h>    // Heltec OLED
 #include <TinyGPS++.h>
@@ -116,8 +117,13 @@ int readUltrasonicAvg(int numReadings) {
 
 // ── Battery Voltage ─────────────────────────────────────────
 float readBatteryV() {
-  int raw = analogRead(BATTERY_PIN);
-  return (raw / 4095.0) * 3.3 * VBAT_DIVIDER;
+  // Average 4 readings for stability
+  long sum = 0;
+  for (int i = 0; i < 4; i++) {
+    sum += analogRead(BATTERY_PIN);
+    delay(5);
+  }
+  return (sum / 4.0 / 4095.0) * 3.3 * VBAT_DIVIDER;
 }
 
 // ── GPS ─────────────────────────────────────────────────────
@@ -238,6 +244,15 @@ void updateDisplay(int distanceCm, float batteryV, bool hasGPS) {
 void setup() {
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
+
+  // Watchdog timer — reboot if loop takes > 60 seconds
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 60000,
+    .idle_core_mask = 0,
+    .trigger_panic = true,
+  };
+  esp_task_wdt_reconfigure(&wdt_config);
+  esp_task_wdt_add(NULL);
 
   // OLED
   display.init();

@@ -13,6 +13,7 @@ export default function SensorsPage() {
   const [filterNeighborhood, setFilterNeighborhood] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterLowBattery, setFilterLowBattery] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [sortCol, setSortCol] = useState<string>("device_id");
   const [sortAsc, setSortAsc] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -76,6 +77,12 @@ export default function SensorsPage() {
     if (filterNeighborhood && d.neighborhood !== filterNeighborhood) return false;
     if (filterStatus && d.status !== filterStatus) return false;
     if (filterLowBattery && (d.battery_v ?? 4) >= 3.3) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      if (!d.device_id.toLowerCase().includes(q) &&
+          !(d.name ?? "").toLowerCase().includes(q) &&
+          !(d.neighborhood ?? "").toLowerCase().includes(q)) return false;
+    }
     return true;
   });
 
@@ -166,7 +173,14 @@ export default function SensorsPage() {
       )}
 
       {/* Filters */}
-      <div className="flex gap-3 mb-4">
+      <div className="flex gap-3 mb-4 flex-wrap items-center">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search sensors..."
+          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary w-48"
+        />
         <select
           value={filterNeighborhood}
           onChange={(e) => setFilterNeighborhood(e.target.value)}
@@ -194,8 +208,11 @@ export default function SensorsPage() {
             onChange={(e) => setFilterLowBattery(e.target.checked)}
             className="accent-status-amber"
           />
-          Low Battery (&lt;20%)
+          Low Battery (&lt;3.3V)
         </label>
+        <span className="text-xs text-text-secondary ml-auto">
+          {filtered.length} of {devices.length} sensors
+        </span>
       </div>
 
       {/* Table */}
@@ -245,8 +262,14 @@ export default function SensorsPage() {
                       {d.battery_v?.toFixed(1) ?? "—"}V
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-text-secondary text-xs">
-                    {d.last_seen ? new Date(d.last_seen).toLocaleString() : "Never"}
+                  <td className="px-4 py-3 text-text-secondary text-xs" title={d.last_seen ? new Date(d.last_seen).toLocaleString() : "Never reported"}>
+                    {d.last_seen ? (() => {
+                      const ms = Date.now() - new Date(d.last_seen).getTime();
+                      if (ms < 60000) return "just now";
+                      if (ms < 3600000) return `${Math.round(ms / 60000)}m ago`;
+                      if (ms < 86400000) return `${Math.round(ms / 3600000)}h ago`;
+                      return `${Math.round(ms / 86400000)}d ago`;
+                    })() : "Never"}
                   </td>
                   <td className="px-4 py-3">{d.altitude_baro?.toFixed(1) ?? "—"}m</td>
                   <td className="px-4 py-3">
