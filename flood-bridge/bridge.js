@@ -34,11 +34,26 @@ async function handleMessage(topic, payload) {
   const valid = isValid(data);
 
   // Look up device to get calibration values
-  const { data: device } = await supabase
+  const { data: device, error: lookupErr } = await supabase
     .from('devices')
     .select('mailbox_height_cm, baseline_distance_cm')
     .eq('device_id', data.deviceId)
     .single();
+
+  if (lookupErr && lookupErr.code === 'PGRST116') {
+    // Device not found — auto-register with defaults
+    console.log(`[BRIDGE] Unknown device ${data.deviceId} — auto-registering`);
+    await supabase.from('devices').insert({
+      device_id: data.deviceId,
+      lat: data.lat,
+      lng: data.lng,
+      altitude_baro: data.altitudeBaro,
+      mailbox_height_cm: 95,
+      status: 'online',
+      battery_v: data.batteryV,
+      last_seen: new Date().toISOString(),
+    });
+  }
 
   const mailboxHeight = device?.mailbox_height_cm ?? 95;
   const floodDepth = Math.max(0, mailboxHeight - data.distanceCm);
