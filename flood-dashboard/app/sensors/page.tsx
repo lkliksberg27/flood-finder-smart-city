@@ -2,16 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { Download, ChevronDown, ChevronUp } from "lucide-react";
-import { getAllDevices, getLatestReadings, getNeighborhoods } from "@/lib/queries";
+import { getAllDevices, getLatestReadings, getNeighborhoods, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, SensorReading } from "@/lib/types";
 
 export default function SensorsPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
+  const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [filterNeighborhood, setFilterNeighborhood] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterLowBattery, setFilterLowBattery] = useState(false);
-  const [sortCol, setSortCol] = useState<keyof Device>("device_id");
+  const [sortCol, setSortCol] = useState<string>("device_id");
   const [sortAsc, setSortAsc] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedReadings, setExpandedReadings] = useState<SensorReading[]>([]);
@@ -19,9 +20,10 @@ export default function SensorsPage() {
   useEffect(() => {
     getAllDevices().then(setDevices).catch(console.error);
     getNeighborhoods().then(setNeighborhoods).catch(console.error);
+    getFloodEventCount30d().then(setFloodCounts).catch(console.error);
   }, []);
 
-  const toggleSort = (col: keyof Device) => {
+  const toggleSort = (col: string) => {
     if (sortCol === col) setSortAsc(!sortAsc);
     else { setSortCol(col); setSortAsc(true); }
   };
@@ -53,8 +55,14 @@ export default function SensorsPage() {
   });
 
   filtered.sort((a, b) => {
-    const av = a[sortCol] ?? "";
-    const bv = b[sortCol] ?? "";
+    let av: string | number | null, bv: string | number | null;
+    if (sortCol === "flood_events_30d") {
+      av = floodCounts[a.device_id] ?? 0;
+      bv = floodCounts[b.device_id] ?? 0;
+    } else {
+      av = a[sortCol as keyof Device] as string | number | null ?? "";
+      bv = b[sortCol as keyof Device] as string | number | null ?? "";
+    }
     const cmp = av < bv ? -1 : av > bv ? 1 : 0;
     return sortAsc ? cmp : -cmp;
   });
@@ -63,8 +71,19 @@ export default function SensorsPage() {
     window.open("/api/export/sensors", "_blank");
   };
 
-  const SortIcon = ({ col }: { col: keyof Device }) =>
+  const SortIcon = ({ col }: { col: string }) =>
     sortCol === col ? (sortAsc ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : null;
+
+  const columns: [string, string][] = [
+    ["device_id", "Device ID"],
+    ["name", "Name"],
+    ["neighborhood", "Neighborhood"],
+    ["status", "Status"],
+    ["battery_v", "Battery"],
+    ["last_seen", "Last Seen"],
+    ["altitude_baro", "Elevation"],
+    ["flood_events_30d", "Floods (30d)"],
+  ];
 
   return (
     <div>
@@ -116,15 +135,7 @@ export default function SensorsPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border-card text-text-secondary text-left">
-              {([
-                ["device_id", "Device ID"],
-                ["name", "Name"],
-                ["neighborhood", "Neighborhood"],
-                ["status", "Status"],
-                ["battery_v", "Battery"],
-                ["last_seen", "Last Seen"],
-                ["altitude_baro", "Elevation"],
-              ] as [keyof Device, string][]).map(([col, label]) => (
+              {columns.map(([col, label]) => (
                 <th
                   key={col}
                   className="px-4 py-3 cursor-pointer hover:text-text-primary select-none"
@@ -139,65 +150,72 @@ export default function SensorsPage() {
           </thead>
           <tbody>
             {filtered.map((d) => (
-              <>
-                <tr
-                  key={d.device_id}
-                  onClick={() => handleExpand(d.device_id)}
-                  className={`border-b border-border-card cursor-pointer transition-colors hover:bg-bg-card-hover ${
-                    isOffline(d) ? "bg-status-red/5" : ""
-                  }`}
-                >
-                  <td className="px-4 py-3 font-mono text-xs">{d.device_id}</td>
-                  <td className="px-4 py-3">{d.name ?? "—"}</td>
-                  <td className="px-4 py-3">{d.neighborhood ?? "—"}</td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                      d.status === "online" ? "bg-status-green/20 text-status-green" :
-                      d.status === "alert" ? "bg-status-red/20 text-status-red" :
-                      "bg-gray-500/20 text-gray-400"
-                    }`}>
-                      {d.status.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={
-                      (d.battery_v ?? 4) < 3.3 ? "text-status-amber" : ""
-                    }>
-                      {d.battery_v?.toFixed(1) ?? "—"}V
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-text-secondary text-xs">
-                    {d.last_seen ? new Date(d.last_seen).toLocaleString() : "Never"}
-                  </td>
-                  <td className="px-4 py-3">{d.altitude_baro?.toFixed(1) ?? "—"}m</td>
-                </tr>
-                {expandedId === d.device_id && (
-                  <tr key={`${d.device_id}-expand`}>
-                    <td colSpan={7} className="px-4 py-3 bg-bg-primary">
-                      <p className="text-xs text-text-secondary mb-2">Last 10 Readings</p>
-                      <div className="grid grid-cols-5 gap-2 text-xs font-mono">
-                        <span className="text-text-secondary">Time</span>
-                        <span className="text-text-secondary">Distance</span>
-                        <span className="text-text-secondary">Flood Depth</span>
-                        <span className="text-text-secondary">Battery</span>
-                        <span className="text-text-secondary">RSSI</span>
-                        {expandedReadings.map((r) => (
-                          <>
-                            <span key={`${r.id}-t`}>{new Date(r.recorded_at).toLocaleTimeString()}</span>
-                            <span key={`${r.id}-d`}>{r.distance_cm}cm</span>
-                            <span key={`${r.id}-f`} className={r.flood_depth_cm > 0 ? "text-status-red" : ""}>
-                              {r.flood_depth_cm}cm
-                            </span>
-                            <span key={`${r.id}-b`}>{r.battery_v?.toFixed(1)}V</span>
-                            <span key={`${r.id}-r`}>{r.rssi}dBm</span>
-                          </>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </>
+              <tr
+                key={d.device_id}
+                onClick={() => handleExpand(d.device_id)}
+                className={`border-b border-border-card cursor-pointer transition-colors hover:bg-bg-card-hover ${
+                  isOffline(d) ? "bg-status-red/5" : ""
+                }`}
+              >
+                <td className="px-4 py-3 font-mono text-xs">{d.device_id}</td>
+                <td className="px-4 py-3">{d.name ?? "—"}</td>
+                <td className="px-4 py-3">{d.neighborhood ?? "—"}</td>
+                <td className="px-4 py-3">
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    d.status === "online" ? "bg-status-green/20 text-status-green" :
+                    d.status === "alert" ? "bg-status-red/20 text-status-red" :
+                    "bg-gray-500/20 text-gray-400"
+                  }`}>
+                    {d.status.toUpperCase()}
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  <span className={
+                    (d.battery_v ?? 4) < 3.3 ? "text-status-amber" : ""
+                  }>
+                    {d.battery_v?.toFixed(1) ?? "—"}V
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-text-secondary text-xs">
+                  {d.last_seen ? new Date(d.last_seen).toLocaleString() : "Never"}
+                </td>
+                <td className="px-4 py-3">{d.altitude_baro?.toFixed(1) ?? "—"}m</td>
+                <td className="px-4 py-3">
+                  <span className={
+                    (floodCounts[d.device_id] ?? 0) > 5 ? "text-status-red font-medium" :
+                    (floodCounts[d.device_id] ?? 0) > 0 ? "text-status-amber" : ""
+                  }>
+                    {floodCounts[d.device_id] ?? 0}
+                  </span>
+                </td>
+              </tr>
             ))}
+            {/* Expanded readings row rendered separately to avoid fragment key issues */}
+            {filtered.map((d) =>
+              expandedId === d.device_id ? (
+                <tr key={`${d.device_id}-expand`}>
+                  <td colSpan={8} className="px-4 py-3 bg-bg-primary">
+                    <p className="text-xs text-text-secondary mb-2">Last 10 Readings</p>
+                    <div className="grid grid-cols-5 gap-2 text-xs font-mono">
+                      <span className="text-text-secondary">Time</span>
+                      <span className="text-text-secondary">Distance</span>
+                      <span className="text-text-secondary">Flood Depth</span>
+                      <span className="text-text-secondary">Battery</span>
+                      <span className="text-text-secondary">RSSI</span>
+                      {expandedReadings.map((r) => [
+                        <span key={`${r.id}-t`}>{new Date(r.recorded_at).toLocaleTimeString()}</span>,
+                        <span key={`${r.id}-d`}>{r.distance_cm}cm</span>,
+                        <span key={`${r.id}-f`} className={r.flood_depth_cm > 0 ? "text-status-red" : ""}>
+                          {r.flood_depth_cm}cm
+                        </span>,
+                        <span key={`${r.id}-b`}>{r.battery_v?.toFixed(1)}V</span>,
+                        <span key={`${r.id}-r`}>{r.rssi}dBm</span>,
+                      ])}
+                    </div>
+                  </td>
+                </tr>
+              ) : null
+            )}
           </tbody>
         </table>
         {filtered.length === 0 && (

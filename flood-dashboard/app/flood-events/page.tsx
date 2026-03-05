@@ -10,12 +10,21 @@ const DeviceMap = dynamic(
   { ssr: false }
 );
 
+type Severity = "" | "low" | "medium" | "high";
+
+function getSeverity(depthCm: number): Severity {
+  if (depthCm > 30) return "high";
+  if (depthCm > 10) return "medium";
+  return "low";
+}
+
 export default function FloodEventsPage() {
   const [events, setEvents] = useState<FloodEvent[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
   const [filterNeighborhood, setFilterNeighborhood] = useState("");
   const [filterStartDate, setFilterStartDate] = useState("");
   const [filterEndDate, setFilterEndDate] = useState("");
+  const [filterSeverity, setFilterSeverity] = useState<Severity>("");
   const [selectedEvent, setSelectedEvent] = useState<FloodEvent | null>(null);
 
   useEffect(() => {
@@ -27,6 +36,7 @@ export default function FloodEventsPage() {
     if (filterNeighborhood && (e.devices as Device | undefined)?.neighborhood !== filterNeighborhood) return false;
     if (filterStartDate && e.started_at < filterStartDate) return false;
     if (filterEndDate && e.started_at > filterEndDate) return false;
+    if (filterSeverity && getSeverity(e.peak_depth_cm) !== filterSeverity) return false;
     return true;
   });
 
@@ -40,7 +50,6 @@ export default function FloodEventsPage() {
     ? Math.round(thisMonth.reduce((s, e) => s + (e.duration_minutes ?? 0), 0) / thisMonth.length)
     : 0;
 
-  // Device with most events this month
   const deviceCounts: Record<string, number> = {};
   thisMonth.forEach((e) => { deviceCounts[e.device_id] = (deviceCounts[e.device_id] || 0) + 1; });
   const worstDevice = Object.entries(deviceCounts).sort((a, b) => b[1] - a[1])[0];
@@ -78,7 +87,7 @@ export default function FloodEventsPage() {
       )}
 
       {/* Filters */}
-      <div className="flex gap-3 mb-4">
+      <div className="flex gap-3 mb-4 flex-wrap">
         <select
           value={filterNeighborhood}
           onChange={(e) => setFilterNeighborhood(e.target.value)}
@@ -88,6 +97,16 @@ export default function FloodEventsPage() {
           {neighborhoods.map((n) => (
             <option key={n} value={n}>{n}</option>
           ))}
+        </select>
+        <select
+          value={filterSeverity}
+          onChange={(e) => setFilterSeverity(e.target.value as Severity)}
+          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
+        >
+          <option value="">All Severities</option>
+          <option value="low">Low (&lt;10cm)</option>
+          <option value="medium">Medium (10-30cm)</option>
+          <option value="high">High (&gt;30cm)</option>
         </select>
         <input
           type="date"

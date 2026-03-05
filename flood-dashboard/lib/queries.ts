@@ -165,6 +165,22 @@ export async function getRecommendations(): Promise<Recommendation[]> {
   return data ?? [];
 }
 
+// ── Flood event counts per device (30 days) ─────────────────
+export async function getFloodEventCount30d(): Promise<Record<string, number>> {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
+  const { data, error } = await getSupabase()
+    .from('flood_events')
+    .select('device_id')
+    .gte('started_at', thirtyDaysAgo);
+  if (error) throw new Error(error.message);
+
+  const counts: Record<string, number> = {};
+  for (const e of data ?? []) {
+    counts[e.device_id] = (counts[e.device_id] || 0) + 1;
+  }
+  return counts;
+}
+
 // ── Neighborhoods ───────────────────────────────────────────
 export async function getNeighborhoods(): Promise<string[]> {
   const { data, error } = await getSupabase()

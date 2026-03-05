@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -10,6 +11,7 @@ import {
   BarChart3,
   BrainCircuit,
 } from "lucide-react";
+import { getSupabase } from "@/lib/supabase";
 
 const navItems = [
   { href: "/", label: "Overview", icon: Map },
@@ -22,6 +24,23 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [sensorCount, setSensorCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    async function fetchCount() {
+      try {
+        const { count } = await getSupabase()
+          .from("devices")
+          .select("device_id", { count: "exact", head: true });
+        setSensorCount(count ?? 0);
+      } catch {
+        setSensorCount(null);
+      }
+    }
+    fetchCount();
+    const interval = setInterval(fetchCount, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-[220px] bg-bg-card border-r border-border-card flex flex-col z-50">
@@ -53,7 +72,14 @@ export function Sidebar() {
       </nav>
 
       <div className="p-4 border-t border-border-card">
-        <p className="text-xs text-text-secondary">Aventura, FL</p>
+        <p className="text-xs text-text-secondary">
+          Connected to{" "}
+          <span className="text-status-green font-medium">
+            {sensorCount !== null ? sensorCount : "..."}
+          </span>{" "}
+          sensors
+        </p>
+        <p className="text-xs text-text-secondary mt-1">Aventura, FL</p>
       </div>
     </aside>
   );

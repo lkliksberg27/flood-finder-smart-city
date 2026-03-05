@@ -1,7 +1,9 @@
 require('dotenv').config();
 const mqtt = require('mqtt');
+const { createClient } = require('@supabase/supabase-js');
 
 const MQTT_URL = `mqtts://${process.env.MQTT_HOST}:8883`;
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const client = mqtt.connect(MQTT_URL, {
   username: process.env.MQTT_USER,
@@ -15,10 +17,19 @@ const NEIGHBORHOODS = [
   'Mystic Pointe', 'Williams Island',
 ];
 
+const STREET_NAMES = [
+  'NE 213th St', 'NE 207th St', 'NE 199th St', 'Aventura Blvd',
+  'Biscayne Blvd', 'Country Club Dr', 'Yacht Club Way', 'Mystic Pointe Dr',
+  'Island Blvd', 'NE 190th St', 'Turnberry Way', 'NE 203rd St',
+  'Waterways Blvd', 'NE 195th St', 'NE 185th St', 'Lehman Causeway',
+  'William Lehman Causeway', 'NE 29th Ave', 'NE 34th Ave', 'NE 188th St',
+];
+
 const devices = Array.from({ length: 20 }, (_, i) => {
   const id = `FF-${String(i + 1).padStart(3, '0')}`;
   return {
     deviceId: id,
+    name: STREET_NAMES[i],
     lat: 25.93 + Math.random() * 0.04,
     lng: -80.16 + Math.random() * 0.04,
     altitudeGPS: 1.0 + Math.random() * 2.5,
@@ -33,6 +44,29 @@ const devices = Array.from({ length: 20 }, (_, i) => {
   };
 });
 
+// ── Seed devices into Supabase so FK constraints work ────────
+async function seedDevices() {
+  console.log('[SIM] Seeding devices into Supabase...');
+  for (const dev of devices) {
+    const { error } = await supabase.from('devices').upsert({
+      device_id: dev.deviceId,
+      name: dev.name,
+      lat: dev.lat,
+      lng: dev.lng,
+      altitude_baro: dev.altitudeBaro,
+      mailbox_height_cm: dev.mailboxHeightCm,
+      baseline_distance_cm: dev.baselineDistanceCm,
+      status: 'online',
+      battery_v: dev.battery,
+      last_seen: new Date().toISOString(),
+      installed_at: new Date().toISOString(),
+      neighborhood: dev.neighborhood,
+    }, { onConflict: 'device_id' });
+    if (error) console.error(`[SIM] Failed to seed ${dev.deviceId}:`, error.message);
+  }
+  console.log(`[SIM] Seeded ${devices.length} devices.`);
+}
+
 // ── State tracking ──────────────────────────────────────────
 let cycle = 0;
 
@@ -40,11 +74,9 @@ function buildPayload(dev) {
   let distanceCm;
 
   if (dev.flooding) {
-    // Simulate water rising then falling
     const elapsed = (Date.now() - dev.floodStart) / 1000;
     const progress = elapsed / dev.floodDuration;
     if (progress >= 1) {
-      // Flood ended
       dev.flooding = false;
       distanceCm = dev.baselineDistanceCm;
     } else {
@@ -54,7 +86,7 @@ function buildPayload(dev) {
       distanceCm = Math.max(10, dev.baselineDistanceCm - Math.floor(intensity * maxFloodDepth));
     }
   } else {
-    // Normal reading with slight noise (±2cm)
+    // Normal reading with slight noise (+/-2cm)
     distanceCm = dev.baselineDistanceCm + Math.floor(Math.random() * 5 - 2);
   }
 
@@ -92,14 +124,17 @@ function publishCycle() {
     const topic = `floodfinder/sensors/${dev.deviceId}`;
     client.publish(topic, JSON.stringify(payload));
 
-    const status = dev.flooding ? '🌊 FLOODING' : '✅ OK';
+    const status = dev.flooding ? 'FLOODING' : 'OK';
     console.log(`[SIM] ${dev.deviceId} ${status} dist=${payload.distanceCm}cm batt=${payload.batteryV}V`);
   }
 }
 
 // ── Main loop ───────────────────────────────────────────────
-client.on('connect', () => {
+client.on('connect', async () => {
   console.log('[SIM] Connected to MQTT broker');
+
+  await seedDevices();
+
   console.log(`[SIM] Simulating ${devices.length} devices`);
 
   // Normal cycle every 15 seconds
