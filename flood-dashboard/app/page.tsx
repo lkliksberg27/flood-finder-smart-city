@@ -182,6 +182,28 @@ export default function OverviewPage() {
               );
             })()}
 
+            {/* Forecast summary */}
+            {weather.forecast && weather.forecast.length > 0 && (
+              <div className="mt-3 border-t border-border-card pt-2">
+                <p className="text-xs text-text-secondary mb-1.5">Forecast</p>
+                <div className="space-y-1">
+                  {weather.forecast.slice(0, 3).map((f, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-text-secondary truncate max-w-[140px]">{f.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-text-primary">{f.shortForecast.length > 18 ? f.shortForecast.slice(0, 18) + "..." : f.shortForecast}</span>
+                        {f.rainChance != null && f.rainChance > 0 && (
+                          <span className={`font-medium ${f.rainChance > 50 ? "text-status-red" : f.rainChance > 30 ? "text-status-amber" : "text-status-blue"}`}>
+                            {f.rainChance}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Rain alert */}
             {rainForecast && (
               <div className="mt-3 p-2 bg-status-amber/10 border border-status-amber/20 rounded text-xs">

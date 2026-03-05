@@ -259,7 +259,10 @@ export default function FloodEventsPage() {
                   <td className="px-4 py-3">
                     {e.ended_at
                       ? `${e.duration_minutes} min`
-                      : <span className="text-status-red">Ongoing</span>
+                      : <span className="text-status-red font-medium flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 bg-status-red rounded-full animate-pulse" />
+                          {Math.round((Date.now() - new Date(e.started_at).getTime()) / 60000)} min
+                        </span>
                     }
                   </td>
                   <td className="px-4 py-3">

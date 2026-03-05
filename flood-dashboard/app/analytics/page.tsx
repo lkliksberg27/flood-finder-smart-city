@@ -210,9 +210,12 @@ export default function AnalyticsPage() {
 
       {/* Auto-generated insights */}
       {totalEvents > 0 && (
-        <div className="bg-bg-card border border-border-card rounded-lg p-4 mb-6">
-          <h3 className="text-sm font-semibold mb-2">Key Insights</h3>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-text-secondary">
+        <div className="bg-bg-card border border-status-blue/20 rounded-lg p-4 mb-6">
+          <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-status-blue" />
+            Auto-Generated Key Insights
+          </h3>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-text-secondary">
             {(() => {
               const insights: string[] = [];
               // Worst neighborhood
