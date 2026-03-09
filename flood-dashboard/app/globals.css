@@ -35,17 +35,32 @@ body {
   font-family: 'DM Sans', sans-serif;
 }
 
-/* Leaflet overrides for dark theme */
-.leaflet-container {
-  background: #0a0e1a;
+/* Mapbox overrides for dark theme */
+.mapboxgl-ctrl-logo,
+.mapboxgl-ctrl-attrib {
+  display: none !important;
 }
-.leaflet-popup-content-wrapper {
+.mapboxgl-popup-content {
   background: #111827;
   color: #f3f4f6;
   border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
 }
-.leaflet-popup-tip {
-  background: #111827;
+.mapboxgl-popup-tip {
+  border-top-color: #111827;
+}
+.mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip {
+  border-top-color: #111827;
+}
+.mapboxgl-popup-anchor-top .mapboxgl-popup-tip {
+  border-bottom-color: #111827;
+}
+.mapboxgl-popup-anchor-left .mapboxgl-popup-tip {
+  border-right-color: #111827;
+}
+.mapboxgl-popup-anchor-right .mapboxgl-popup-tip {
+  border-left-color: #111827;
 }
 
 /* Pulsing alert marker */
