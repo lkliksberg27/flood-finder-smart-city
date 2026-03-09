@@ -274,13 +274,54 @@ export async function POST(request: Request) {
       max_tokens: 4000,
       messages: [{
         role: "user",
-        content: `You are a senior urban flood infrastructure engineer consulting for the City of Aventura, Florida.
+        content: `You are a senior urban flood infrastructure engineer consulting for the City of Aventura, Florida (Miami-Dade County).
 ${neighborhoodFilter
   ? `You are analyzing 30 days of data SPECIFICALLY for the ${neighborhoodFilter} neighborhood — ${allDevices.length} sensors in this area.
 Focus all recommendations on this neighborhood's specific conditions, drainage patterns, and infrastructure needs.`
   : `You are analyzing 30 days of real-time data from ${allDevices.length} IoT flood sensors mounted on mailboxes across the city.`}
 Each sensor uses an ultrasonic distance sensor to detect water depth, a BMP390 barometric altimeter for precision elevation (±0.25m), and GPS.
 NOAA weather and tide data is automatically correlated with each flood event.
+
+═══════════════════════════════════════════════════
+REFERENCE: ENGINEERING STANDARDS & REGIONAL CONTEXT
+Use these real-world benchmarks to ground your recommendations.
+═══════════════════════════════════════════════════
+AVENTURA CONTEXT:
+- Storm sewers discharge to Intracoastal Waterway / Biscayne Bay (tidal)
+- Most of Aventura is FEMA Special Flood Hazard Area (AE Zone)
+- CRS Class 7 rating — ~$600K/year in community flood insurance discounts
+- Poorly to moderately drained soils, heavily modified by development
+- SE Florida sea level rise projections: +10-17in by 2040, +17-31in by 2060 (SE FL Climate Compact)
+- South Florida annual rainfall: 52-53in, ~75% in wet season (June-October)
+- Intense thunderstorms can produce 3in/hr; 100-year storm = 12+in/24hrs (SFWMD)
+
+FEMA / NATIONAL STANDARDS:
+- Every $1 in FEMA hazard mitigation saves $6 on average (NIBS/FEMA 23-year study)
+- Standard storm drains designed for 5-10 year storms (ASCE MOP 77); anything beyond causes surcharge
+- Urban runoff is 5x+ greater than pre-development due to impervious surfaces
+- At 15cm (6in) water depth: small vehicles stall. At 60cm (2ft): emergency vehicles stall (FEMA)
+- New construction must be 12in above Base Flood Elevation (FFRMS 2024)
+
+SFWMD DESIGN CRITERIA:
+- Post-development discharge must equal or be less than pre-development rates
+- Treatment volume: 0.5in of runoff (or 1.88in × impervious area)
+- Swale systems must percolate 80% of runoff from 3-year/1-hour storm
+- Treatment volume recovery required within 72 hours
+
+PROVEN INFRASTRUCTURE EFFECTIVENESS (EPA/ASCE data):
+- Bioswales: capture up to 90% of sediment, 80% of metals/oils, 65% of phosphorus
+- Rain gardens / bioretention: 56% average runoff volume reduction
+- Permeable pavement: 50-90% peak flow reduction, 40-90% volume reduction
+- Green roofs: 49-83% rainfall retention depending on vegetation
+- Backflow preventers / tide gates: eliminate tidal backflow flooding (proven in Charleston SC)
+
+COST BENCHMARKS:
+- Pump stations: $150K (20 gpm) to $1.5M (100K gpm); planning estimate $30-40K per CFS capacity
+- Retention/detention ponds: $10K-$21K per acre served; O&M 1-6% of construction cost/year
+- Seawalls (South FL): $700-$1,200 per linear foot (vinyl)
+- Bioswales: can reduce infrastructure costs from $850K (concrete vault) to $350K
+- Permeable pavement: porous asphalt ~$1/sqft, pervious concrete ~$5/sqft
+- Backflow preventers: ~$350 per installation (simple sewer)
 
 ═══════════════════════════════════════════════════
 SECTION 1: FLOOD RISK SCORES (computed from all data sources)
@@ -331,33 +372,35 @@ You must produce actionable infrastructure recommendations that a city engineer 
    - Rainfall correlation → what mm threshold triggers flooding at this location
    - Tidal influence → does high tide prevent storm drain outfall discharge
    - Compound events → rain + tide combinations that overwhelm the system
-3. RECOMMEND a specific infrastructure improvement:
+3. RECOMMEND a specific infrastructure improvement, citing the engineering standards above:
    - For road dips: catch basins, inlet capacity upgrades, road crown re-grading
-   - For low elevation: bioswales, retention/detention ponds, French drains, pump stations
-   - For tidal backflow: backflow preventers, tide gates, check valves on outfalls
+   - For low elevation: bioswales (90% sediment capture per EPA), retention ponds ($10-21K/acre), French drains, pump stations
+   - For tidal backflow: backflow preventers ($350/unit), tide gates, check valves on outfalls
    - For overwhelmed drainage: pipe upsizing, parallel relief pipes, new outfall locations
-   - For neighborhood-wide issues: green infrastructure corridors, permeable pavement zones
+   - For neighborhood-wide issues: green infrastructure corridors, permeable pavement (50-90% peak flow reduction per ASCE)
+   - Always note the FEMA $6:$1 mitigation ROI when justifying investment
 4. ESTIMATE the impact quantitatively: "Based on the data, this would reduce flood frequency at [sensor] from [X] events/month to approximately [Y], a [Z]% reduction"
-5. ESTIMATE rough cost category: low ($10K-50K), medium ($50K-250K), high ($250K-1M+)
-6. PRIORITIZE by cost-effectiveness ratio: improvements that protect the most sensors for the least cost
+5. ESTIMATE cost using the real benchmarks above — not generic ranges
+6. CONSIDER sea level rise: note that SE Florida projects +10-17in by 2040, so solutions must have 50+ year design life
+7. CITE specific standards (FEMA, SFWMD, EPA, ASCE) when recommending solutions — this gives city commissioners confidence
 
 Return a JSON object (no markdown fences, raw JSON only):
 {
-  "summary": "2-3 sentence executive summary of the overall flood situation",
+  "summary": "2-3 sentence executive summary of the overall flood situation, referencing Aventura's specific risk context",
   "recommendations": [
     {
       "priority": "high" | "medium" | "low",
       "category": "drainage" | "elevation" | "barrier" | "other",
       "affected_devices": ["FF-001", "FF-003"],
       "title": "Short title for the recommendation",
-      "text": "Detailed multi-paragraph recommendation with data citations and impact estimates",
+      "text": "Detailed multi-paragraph recommendation with data citations, engineering standard references, and impact estimates",
       "estimated_cost": "low" | "medium" | "high",
       "estimated_reduction_pct": 65
     }
   ]
 }
 
-Generate 6-8 recommendations ordered by priority, mixing all data sources for valuable cross-referenced insights.`,
+Generate 6-8 recommendations ordered by priority. Each must cite at least one engineering standard or data source from the reference section above.`,
       }],
     });
 
