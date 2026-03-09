@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { BrainCircuit, Loader2, TrendingDown, DollarSign, MapPin, Clock } from "lucide-react";
+import { BrainCircuit, Loader2, TrendingDown, DollarSign, MapPin, Clock, Filter } from "lucide-react";
 import { getRecommendations, getAllDevices } from "@/lib/queries";
 import type { Recommendation, Device } from "@/lib/types";
 
@@ -67,6 +67,8 @@ const COST_LABELS: Record<string, { label: string; color: string }> = {
 export default function AIRecommendationsPage() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [selectedRec, setSelectedRec] = useState<Recommendation | null>(null);
@@ -77,13 +79,21 @@ export default function AIRecommendationsPage() {
       getRecommendations().then(setRecommendations),
       getAllDevices().then(setDevices),
     ]).catch(console.error).finally(() => setInitialLoading(false));
+    // Get unique neighborhoods from devices
+    getAllDevices().then((devs) => {
+      const hoods = [...new Set(devs.map((d) => d.neighborhood).filter(Boolean))] as string[];
+      setNeighborhoods(hoods.sort());
+    });
   }, []);
 
   const runAnalysis = async () => {
     setLoading(true);
     setAnalysisMessage(null);
     try {
-      const res = await fetch("/api/run-analysis", { method: "POST" });
+      const url = selectedNeighborhood
+        ? `/api/run-analysis?neighborhood=${encodeURIComponent(selectedNeighborhood)}`
+        : "/api/run-analysis";
+      const res = await fetch(url, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Analysis failed");
       setAnalysisMessage(data.summary ? `${data.message}\n\n${data.summary}` : data.message);
@@ -136,14 +146,33 @@ export default function AIRecommendationsPage() {
             Cross-references elevation, NOAA weather, tide data, and flood patterns to identify infrastructure improvements
           </p>
         </div>
-        <button
-          onClick={runAnalysis}
-          disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 bg-status-blue/20 text-status-blue rounded-lg hover:bg-status-blue/30 transition-colors text-sm disabled:opacity-50"
-        >
-          {loading ? <Loader2 size={16} className="animate-spin" /> : <BrainCircuit size={16} />}
-          {loading ? "Analyzing all sensor data..." : "Run New Analysis"}
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Filter size={14} className="text-text-secondary" />
+            <select
+              value={selectedNeighborhood}
+              onChange={(e) => setSelectedNeighborhood(e.target.value)}
+              className="bg-bg-card border border-border-card rounded-lg px-3 py-2 text-sm text-text-primary min-w-[160px]"
+            >
+              <option value="">All Neighborhoods</option>
+              {neighborhoods.map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={runAnalysis}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-status-blue/20 text-status-blue rounded-lg hover:bg-status-blue/30 transition-colors text-sm disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <BrainCircuit size={16} />}
+            {loading
+              ? `Analyzing ${selectedNeighborhood || "all"} sensor data...`
+              : selectedNeighborhood
+                ? `Analyze ${selectedNeighborhood}`
+                : "Run Full Analysis"}
+          </button>
+        </div>
       </div>
 
       {analysisMessage && (
