@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import dynamic from "next/dynamic";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ScatterChart, Scatter, LineChart, Line,
@@ -9,6 +10,11 @@ import {
 import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp } from "lucide-react";
 import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, FloodEvent } from "@/lib/types";
+
+const AnalyticsMap = dynamic(
+  () => import("@/components/AnalyticsMap").then((m) => m.AnalyticsMap),
+  { ssr: false }
+);
 
 const CHART_COLORS = {
   blue: "#3b82f6",
@@ -170,6 +176,16 @@ export default function AnalyticsPage() {
               {areas.filter((a) => a.riskLevel === "critical" || a.riskLevel === "high").length}
             </p>
           </div>
+        </div>
+
+        {/* City-wide flood map */}
+        <div className="h-[380px] rounded-lg overflow-hidden border border-border-card mb-6">
+          <AnalyticsMap
+            devices={allDevices}
+            events={allEvents}
+            floodCounts={floodCounts}
+            onAreaClick={(n) => setSelectedArea(n)}
+          />
         </div>
 
         {/* Area cards */}
@@ -474,6 +490,16 @@ export default function AnalyticsPage() {
           </div>
         </div>
       )}
+
+      {/* Neighborhood flood map */}
+      <div className="h-[350px] rounded-lg overflow-hidden border border-border-card mb-6">
+        <AnalyticsMap
+          devices={devices}
+          events={events}
+          floodCounts={floodCounts}
+          selectedArea={selectedArea}
+        />
+      </div>
 
       {/* Charts grid */}
       <div className="grid grid-cols-2 gap-6">
