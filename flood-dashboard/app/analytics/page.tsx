@@ -6,8 +6,8 @@ import {
   ScatterChart, Scatter, LineChart, Line,
   ResponsiveContainer, Cell, Legend,
 } from "recharts";
-import { Loader2, Filter } from "lucide-react";
-import { getAllDevices, getAllFloodEvents, getFloodEventCount30d, getNeighborhoods } from "@/lib/queries";
+import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp } from "lucide-react";
+import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, FloodEvent } from "@/lib/types";
 
 const CHART_COLORS = {
@@ -25,12 +25,37 @@ const tooltipStyle = {
   color: "#f3f4f6",
 };
 
+interface AreaSummary {
+  name: string;
+  sensors: number;
+  events: number;
+  avgDepth: number;
+  maxDepth: number;
+  compoundEvents: number;
+  avgElevation: number;
+  riskLevel: "critical" | "high" | "moderate" | "low";
+}
+
+function computeRisk(events: number, avgDepth: number, compoundEvents: number): "critical" | "high" | "moderate" | "low" {
+  const score = events * 3 + avgDepth * 0.5 + compoundEvents * 5;
+  if (score > 50) return "critical";
+  if (score > 25) return "high";
+  if (score > 10) return "moderate";
+  return "low";
+}
+
+const RISK_STYLES = {
+  critical: { bg: "bg-status-red/15", border: "border-status-red/40", text: "text-status-red", label: "CRITICAL" },
+  high: { bg: "bg-status-amber/15", border: "border-status-amber/40", text: "text-status-amber", label: "HIGH RISK" },
+  moderate: { bg: "bg-status-blue/15", border: "border-status-blue/40", text: "text-status-blue", label: "MODERATE" },
+  low: { bg: "bg-status-green/15", border: "border-status-green/40", text: "text-status-green", label: "LOW RISK" },
+};
+
 export default function AnalyticsPage() {
   const [allDevices, setAllDevices] = useState<Device[]>([]);
   const [allEvents, setAllEvents] = useState<FloodEvent[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
-  const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
-  const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
+  const [selectedArea, setSelectedArea] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -38,25 +63,203 @@ export default function AnalyticsPage() {
       getAllDevices().then(setAllDevices),
       getAllFloodEvents(1000).then(setAllEvents),
       getFloodEventCount30d().then(setFloodCounts),
-      getNeighborhoods().then(setNeighborhoods),
     ]).catch(console.error).finally(() => setLoading(false));
   }, []);
 
-  // Filter devices and events by selected neighborhood
+  // Build area summaries for landing page
+  const areas = useMemo<AreaSummary[]>(() => {
+    const map: Record<string, { sensors: Device[]; events: FloodEvent[] }> = {};
+    allDevices.forEach((d) => {
+      const n = d.neighborhood ?? "Other";
+      if (!map[n]) map[n] = { sensors: [], events: [] };
+      map[n].sensors.push(d);
+    });
+    allEvents.forEach((e) => {
+      const dev = e.devices as Device | undefined;
+      const n = dev?.neighborhood ?? "Other";
+      if (!map[n]) map[n] = { sensors: [], events: [] };
+      map[n].events.push(e);
+    });
+
+    return Object.entries(map)
+      .map(([name, { sensors, events }]) => {
+        const avgDepth = events.length > 0
+          ? Math.round(events.reduce((s, e) => s + e.peak_depth_cm, 0) / events.length)
+          : 0;
+        const maxDepth = events.length > 0
+          ? Math.max(...events.map((e) => e.peak_depth_cm))
+          : 0;
+        const compoundEvents = events.filter(
+          (e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3
+        ).length;
+        const elevations = sensors.filter((d) => d.altitude_baro != null).map((d) => d.altitude_baro!);
+        const avgElevation = elevations.length > 0
+          ? parseFloat((elevations.reduce((s, e) => s + e, 0) / elevations.length).toFixed(2))
+          : 0;
+
+        return {
+          name,
+          sensors: sensors.length,
+          events: events.length,
+          avgDepth,
+          maxDepth,
+          compoundEvents,
+          avgElevation,
+          riskLevel: computeRisk(events.length, avgDepth, compoundEvents),
+        };
+      })
+      .sort((a, b) => {
+        const order = { critical: 0, high: 1, moderate: 2, low: 3 };
+        return order[a.riskLevel] - order[b.riskLevel] || b.events - a.events;
+      });
+  }, [allDevices, allEvents]);
+
+  // Filtered data for drilled-in view
   const devices = useMemo(() => {
-    if (!selectedNeighborhood) return allDevices;
-    return allDevices.filter((d) => d.neighborhood === selectedNeighborhood);
-  }, [allDevices, selectedNeighborhood]);
+    if (!selectedArea) return allDevices;
+    return allDevices.filter((d) => (d.neighborhood ?? "Other") === selectedArea);
+  }, [allDevices, selectedArea]);
 
   const events = useMemo(() => {
-    if (!selectedNeighborhood) return allEvents;
+    if (!selectedArea) return allEvents;
     return allEvents.filter((e) => {
       const dev = e.devices as Device | undefined;
-      return dev?.neighborhood === selectedNeighborhood;
+      return (dev?.neighborhood ?? "Other") === selectedArea;
     });
-  }, [allEvents, selectedNeighborhood]);
+  }, [allEvents, selectedArea]);
 
-  // 1. Flood events per week (last 6 months)
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <div className="text-center">
+          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
+          <p className="text-sm text-text-secondary">Crunching flood data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // LANDING VIEW — Pick an area
+  // ═══════════════════════════════════════════════════
+  if (!selectedArea) {
+    return (
+      <div>
+        <h2 className="text-xl font-semibold mb-1">Flood Analytics</h2>
+        <p className="text-sm text-text-secondary mb-6">
+          Select a neighborhood to view detailed flood patterns, risk factors, and infrastructure insights for that area.
+        </p>
+
+        {/* City-wide quick stats */}
+        <div className="grid grid-cols-4 gap-4 mb-8">
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Total Flood Events</p>
+            <p className="text-2xl font-bold text-status-blue mt-1">{allEvents.length}</p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Active Sensors</p>
+            <p className="text-2xl font-bold text-status-green mt-1">{allDevices.length}</p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">Neighborhoods Monitored</p>
+            <p className="text-2xl font-bold mt-1">{areas.length}</p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-4">
+            <p className="text-xs text-text-secondary uppercase">High Risk Areas</p>
+            <p className="text-2xl font-bold text-status-red mt-1">
+              {areas.filter((a) => a.riskLevel === "critical" || a.riskLevel === "high").length}
+            </p>
+          </div>
+        </div>
+
+        {/* Area cards */}
+        <div className="grid grid-cols-2 gap-4">
+          {areas.map((area) => {
+            const style = RISK_STYLES[area.riskLevel];
+            return (
+              <button
+                key={area.name}
+                onClick={() => setSelectedArea(area.name)}
+                className={`${style.bg} border ${style.border} rounded-lg p-5 text-left hover:brightness-110 transition-all group`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <MapPin size={16} className={style.text} />
+                    <h3 className="text-base font-semibold">{area.name}</h3>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded text-xs font-bold ${style.text}`}>
+                    {style.label}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <p className="text-text-secondary">Sensors</p>
+                    <p className="text-base font-bold mt-0.5">{area.sensors}</p>
+                  </div>
+                  <div>
+                    <p className="text-text-secondary">Flood Events</p>
+                    <p className={`text-base font-bold mt-0.5 ${area.events > 5 ? "text-status-red" : ""}`}>
+                      {area.events}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-text-secondary">Avg Depth</p>
+                    <p className={`text-base font-bold mt-0.5 ${area.avgDepth > 20 ? "text-status-red" : area.avgDepth > 10 ? "text-status-amber" : ""}`}>
+                      {area.avgDepth}cm
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-text-secondary">Avg Elevation</p>
+                    <p className={`text-base font-bold mt-0.5 ${area.avgElevation < 1.0 ? "text-status-amber" : ""}`}>
+                      {area.avgElevation}m
+                    </p>
+                  </div>
+                </div>
+
+                {area.compoundEvents > 0 && (
+                  <div className="mt-3 flex items-center gap-1.5 text-xs text-status-red">
+                    <AlertTriangle size={12} />
+                    {area.compoundEvents} compound flood event{area.compoundEvents > 1 ? "s" : ""} (rain + high tide)
+                  </div>
+                )}
+
+                <p className="text-xs text-text-secondary mt-3 group-hover:text-text-primary transition-colors">
+                  Click to view full analysis →
+                </p>
+              </button>
+            );
+          })}
+        </div>
+
+        {areas.length === 0 && (
+          <div className="text-center py-16 text-text-secondary">
+            <MapPin size={48} className="mx-auto mb-4 opacity-20" />
+            <p className="text-lg mb-2">No neighborhoods found</p>
+            <p className="text-sm">Add sensors with neighborhood data to see area analytics.</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // DRILLED-IN VIEW — Full analytics for one area
+  // ═══════════════════════════════════════════════════
+
+  const totalEvents = events.length;
+  const avgDepth = totalEvents > 0
+    ? Math.round(events.reduce((s, e) => s + e.peak_depth_cm, 0) / totalEvents)
+    : 0;
+  const avgDuration = totalEvents > 0
+    ? Math.round(events.reduce((s, e) => s + (e.duration_minutes ?? 0), 0) / totalEvents)
+    : 0;
+  const rainfallCorrelation = events.filter((e) => (e.rainfall_mm ?? 0) > 0).length;
+  const compoundEvents = events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3).length;
+  const highSeverityCount = events.filter((e) => e.peak_depth_cm > 30).length;
+  const maxDepth = totalEvents > 0 ? Math.max(...events.map((e) => e.peak_depth_cm)) : 0;
+
+  // Weekly trend
   const sixMonthsAgo = Date.now() - 180 * 86400 * 1000;
   const weeklyData: Record<string, number> = {};
   events
@@ -72,7 +275,7 @@ export default function AnalyticsPage() {
     .map(([week, count]) => ({ week: week.slice(5), count }))
     .sort((a, b) => a.week.localeCompare(b.week));
 
-  // 2. Top 10 flooding sensors
+  // Top sensors in this area
   const deviceCounts: Record<string, { name: string; count: number }> = {};
   events.forEach((e) => {
     if (!deviceCounts[e.device_id]) {
@@ -86,19 +289,50 @@ export default function AnalyticsPage() {
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
 
-  // 3. Flood depth vs rainfall scatter
+  // Rainfall scatter
   const scatterData = events
     .filter((e) => e.rainfall_mm != null && e.rainfall_mm > 0)
     .map((e) => ({ rainfall: e.rainfall_mm, depth: e.peak_depth_cm }));
 
-  // 4. Flood events by hour of day
+  // Hour distribution
   const hourCounts = Array.from({ length: 24 }, (_, i) => ({ hour: `${i}:00`, count: 0 }));
   events.forEach((e) => {
     const h = new Date(e.started_at).getHours();
     hourCounts[h].count++;
   });
 
-  // 5. Battery distribution
+  // Elevation vs floods
+  const elevationFloodData = devices
+    .filter((d) => d.altitude_baro != null)
+    .map((d) => ({
+      device: d.device_id,
+      elevation: parseFloat((d.altitude_baro ?? 0).toFixed(2)),
+      floods: floodCounts[d.device_id] ?? 0,
+    }))
+    .sort((a, b) => a.elevation - b.elevation);
+
+  // Tide scatter
+  const tideFloodData = events
+    .filter((e) => e.tide_level_m != null)
+    .map((e) => ({
+      tide: parseFloat((e.tide_level_m ?? 0).toFixed(2)),
+      depth: e.peak_depth_cm,
+    }));
+
+  // Compound breakdown
+  const compoundBreakdown = [
+    { type: "Rain Only", count: events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.blue },
+    { type: "High Tide Only", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) > 0.3).length, color: CHART_COLORS.green },
+    { type: "Rain + Tide", count: compoundEvents, color: CHART_COLORS.red },
+    { type: "Neither", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.amber },
+  ];
+
+  // Duration vs depth
+  const durationDepthData = events
+    .filter((e) => e.duration_minutes != null && e.duration_minutes > 0)
+    .map((e) => ({ duration: e.duration_minutes!, depth: e.peak_depth_cm }));
+
+  // Battery
   const batteryBuckets = [
     { label: ">3.8V", min: 3.8, max: 5, count: 0, color: CHART_COLORS.green },
     { label: "3.5-3.8V", min: 3.5, max: 3.8, count: 0, color: CHART_COLORS.blue },
@@ -111,215 +345,137 @@ export default function AnalyticsPage() {
     bucket.count++;
   });
 
-  // 6. Elevation vs Flood Frequency
-  const elevationFloodData = devices
-    .filter((d) => d.altitude_baro != null)
-    .map((d) => ({
-      device: d.device_id,
-      elevation: parseFloat((d.altitude_baro ?? 0).toFixed(2)),
-      floods: floodCounts[d.device_id] ?? 0,
-    }))
-    .sort((a, b) => a.elevation - b.elevation);
+  // Peak hour
+  const peakHour = hourCounts.reduce((max, h) => h.count > max.count ? h : max, hourCounts[0]);
 
-  // 7. Tide level vs flood depth correlation
-  const tideFloodData = events
-    .filter((e) => e.tide_level_m != null)
-    .map((e) => ({
-      tide: parseFloat((e.tide_level_m ?? 0).toFixed(2)),
-      depth: e.peak_depth_cm,
-    }));
-
-  // Summary stats
-  const totalEvents = events.length;
-  const avgDepth = totalEvents > 0
-    ? Math.round(events.reduce((s, e) => s + e.peak_depth_cm, 0) / totalEvents)
-    : 0;
-  const avgDuration = totalEvents > 0
-    ? Math.round(events.reduce((s, e) => s + (e.duration_minutes ?? 0), 0) / totalEvents)
-    : 0;
-  const rainfallCorrelation = events.filter((e) => (e.rainfall_mm ?? 0) > 0).length;
-  const compoundEvents = events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3).length;
-
-  // 8. Neighborhood flood comparison
-  const neighborhoodData: Record<string, { events: number; avgDepth: number; sensors: number }> = {};
-  devices.forEach((d) => {
-    const n = d.neighborhood ?? "Unknown";
-    if (!neighborhoodData[n]) neighborhoodData[n] = { events: 0, avgDepth: 0, sensors: 0 };
-    neighborhoodData[n].sensors++;
-  });
-  events.forEach((e) => {
-    const dev = e.devices as Device | undefined;
-    const n = dev?.neighborhood ?? "Unknown";
-    if (!neighborhoodData[n]) neighborhoodData[n] = { events: 0, avgDepth: 0, sensors: 0 };
-    neighborhoodData[n].events++;
-    neighborhoodData[n].avgDepth += e.peak_depth_cm;
-  });
-  const neighborhoodChart = Object.entries(neighborhoodData)
-    .map(([name, d]) => ({
-      name: name.length > 12 ? name.slice(0, 12) + "..." : name,
-      events: d.events,
-      avgDepth: d.events > 0 ? Math.round(d.avgDepth / d.events) : 0,
-    }))
-    .sort((a, b) => b.events - a.events)
-    .slice(0, 8);
-
-  // 9. Duration vs depth scatter
-  const durationDepthData = events
-    .filter((e) => e.duration_minutes != null && e.duration_minutes > 0)
-    .map((e) => ({
-      duration: e.duration_minutes!,
-      depth: e.peak_depth_cm,
-    }));
-
-  // 10. Compound events breakdown
-  const compoundBreakdown = [
-    { type: "Rain Only", count: events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.blue },
-    { type: "High Tide Only", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) > 0.3).length, color: CHART_COLORS.green },
-    { type: "Rain + Tide", count: compoundEvents, color: CHART_COLORS.red },
-    { type: "Neither", count: events.filter((e) => (e.rainfall_mm ?? 0) <= 0 && (e.tide_level_m ?? 0) <= 0.3).length, color: CHART_COLORS.amber },
-  ];
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
-        <div className="text-center">
-          <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
-          <p className="text-sm text-text-secondary">Crunching flood data...</p>
-        </div>
-      </div>
-    );
-  }
+  // Area summary for the selected area
+  const areaInfo = areas.find((a) => a.name === selectedArea);
+  const riskStyle = areaInfo ? RISK_STYLES[areaInfo.riskLevel] : RISK_STYLES.low;
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-semibold">Analytics & Patterns</h2>
-          <p className="text-sm text-text-secondary mt-1">
-            {selectedNeighborhood
-              ? `Flood analysis for ${selectedNeighborhood} — ${devices.length} sensors, ${totalEvents} events`
-              : `Data-driven flood pattern analysis across ${allDevices.length} sensors`}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Filter size={16} className="text-text-secondary" />
-          <select
-            value={selectedNeighborhood}
-            onChange={(e) => setSelectedNeighborhood(e.target.value)}
-            className="bg-bg-card border border-border-card rounded-lg px-3 py-2 text-sm text-text-primary min-w-[180px]"
-          >
-            <option value="">All Neighborhoods</option>
-            {neighborhoods.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-          {selectedNeighborhood && (
-            <button
-              onClick={() => setSelectedNeighborhood("")}
-              className="text-xs text-text-secondary hover:text-text-primary transition-colors"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
+      {/* Header with back button */}
+      <button
+        onClick={() => setSelectedArea(null)}
+        className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors mb-4"
+      >
+        <ArrowLeft size={16} /> Back to all neighborhoods
+      </button>
 
-      {/* Summary stats */}
-      <div className="grid grid-cols-5 gap-4 mb-6">
+      <div className="flex items-center gap-3 mb-1">
+        <MapPin size={20} className={riskStyle.text} />
+        <h2 className="text-xl font-semibold">{selectedArea}</h2>
+        <span className={`px-2.5 py-0.5 rounded text-xs font-bold ${riskStyle.text} ${riskStyle.bg}`}>
+          {riskStyle.label}
+        </span>
+      </div>
+      <p className="text-sm text-text-secondary mb-6">
+        {devices.length} sensors monitoring this area — {totalEvents} flood events recorded
+      </p>
+
+      {/* Area-specific summary */}
+      <div className="grid grid-cols-6 gap-3 mb-6">
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Total Events</p>
-          <p className="text-2xl font-bold text-status-blue mt-1">{totalEvents}</p>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Droplets size={12} className="text-status-blue" />
+            <p className="text-xs text-text-secondary">Flood Events</p>
+          </div>
+          <p className="text-2xl font-bold text-status-blue">{totalEvents}</p>
         </div>
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Avg Depth</p>
-          <p className="text-2xl font-bold text-status-amber mt-1">{avgDepth}cm</p>
+          <div className="flex items-center gap-1.5 mb-1">
+            <TrendingUp size={12} className="text-status-amber" />
+            <p className="text-xs text-text-secondary">Avg Depth</p>
+          </div>
+          <p className="text-2xl font-bold text-status-amber">{avgDepth}cm</p>
         </div>
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Avg Duration</p>
-          <p className="text-2xl font-bold mt-1">{avgDuration} min</p>
+          <div className="flex items-center gap-1.5 mb-1">
+            <AlertTriangle size={12} className="text-status-red" />
+            <p className="text-xs text-text-secondary">Worst Flood</p>
+          </div>
+          <p className="text-2xl font-bold text-status-red">{maxDepth}cm</p>
         </div>
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Rain-Linked</p>
-          <p className="text-2xl font-bold text-status-green mt-1">
+          <div className="flex items-center gap-1.5 mb-1">
+            <Clock size={12} className="text-text-secondary" />
+            <p className="text-xs text-text-secondary">Avg Duration</p>
+          </div>
+          <p className="text-2xl font-bold">{avgDuration} min</p>
+        </div>
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <p className="text-xs text-text-secondary mb-1">Rain-Linked</p>
+          <p className="text-2xl font-bold text-status-green">
             {totalEvents > 0 ? Math.round((rainfallCorrelation / totalEvents) * 100) : 0}%
           </p>
         </div>
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Compound Events</p>
-          <p className="text-2xl font-bold text-status-red mt-1">
-            {compoundEvents}
-          </p>
+          <p className="text-xs text-text-secondary mb-1">Compound Events</p>
+          <p className="text-2xl font-bold text-status-red">{compoundEvents}</p>
         </div>
       </div>
 
-      {/* Auto-generated insights */}
+      {/* Plain-language area assessment */}
       {totalEvents > 0 && (
-        <div className="bg-bg-card border border-status-blue/20 rounded-lg p-4 mb-6">
+        <div className={`${riskStyle.bg} border ${riskStyle.border} rounded-lg p-5 mb-6`}>
           <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-status-blue" />
-            Auto-Generated Key Insights
+            <span className={`w-2 h-2 rounded-full ${riskStyle.text === "text-status-red" ? "bg-status-red" : riskStyle.text === "text-status-amber" ? "bg-status-amber" : riskStyle.text === "text-status-blue" ? "bg-status-blue" : "bg-status-green"}`} />
+            Area Assessment — {selectedArea}
           </h3>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-text-secondary">
+          <div className="space-y-2 text-sm text-text-primary/90">
             {(() => {
-              const insights: string[] = [];
-              // Worst neighborhood
-              const worstN = neighborhoodChart[0];
-              if (worstN) insights.push(`${worstN.name} has the most flood events (${worstN.events}) with avg depth ${worstN.avgDepth}cm`);
-              // Compound percentage
-              if (compoundEvents > 0) insights.push(`${Math.round((compoundEvents / totalEvents) * 100)}% of floods are compound events (rain + high tide simultaneously)`);
-              // Rain correlation
-              if (rainfallCorrelation > 0) insights.push(`${Math.round((rainfallCorrelation / totalEvents) * 100)}% of flood events correlate with measurable rainfall`);
-              // Peak hour
-              const peakHour = hourCounts.reduce((max, h) => h.count > max.count ? h : max, hourCounts[0]);
-              if (peakHour.count > 0) insights.push(`Most floods occur at ${peakHour.hour} — ${peakHour.count} events recorded at this hour`);
-              // Elevation correlation
-              const lowSensors = elevationFloodData.filter((d) => d.elevation < 1.0);
-              const highSensors = elevationFloodData.filter((d) => d.elevation >= 1.5);
-              if (lowSensors.length > 0 && highSensors.length > 0) {
-                const lowAvgFloods = lowSensors.reduce((s, d) => s + d.floods, 0) / lowSensors.length;
-                const highAvgFloods = highSensors.reduce((s, d) => s + d.floods, 0) / highSensors.length;
-                if (lowAvgFloods > highAvgFloods) insights.push(`Sensors below 1.0m elevation flood ${lowAvgFloods.toFixed(1)}x vs ${highAvgFloods.toFixed(1)}x for sensors above 1.5m`);
-              }
-              // Trend analysis — compare first half vs second half of data
-              const sorted = [...events].sort((a, b) => a.started_at.localeCompare(b.started_at));
-              const mid = Math.floor(sorted.length / 2);
-              if (sorted.length >= 10) {
-                const firstHalf = sorted.slice(0, mid);
-                const secondHalf = sorted.slice(mid);
-                const firstAvgDepth = firstHalf.reduce((s, e) => s + e.peak_depth_cm, 0) / firstHalf.length;
-                const secondAvgDepth = secondHalf.reduce((s, e) => s + e.peak_depth_cm, 0) / secondHalf.length;
-                const changePct = Math.round(((secondAvgDepth - firstAvgDepth) / firstAvgDepth) * 100);
-                if (Math.abs(changePct) > 10) {
-                  insights.push(changePct > 0
-                    ? `Flood severity is increasing — avg depth rose ${changePct}% in recent events compared to earlier data`
-                    : `Flood severity is decreasing — avg depth dropped ${Math.abs(changePct)}% in recent events`
-                  );
-                }
-              }
-              // Worst time of day
-              const afternoonFloods = hourCounts.slice(12, 17).reduce((s, h) => s + h.count, 0);
-              const morningFloods = hourCounts.slice(6, 12).reduce((s, h) => s + h.count, 0);
-              if (afternoonFloods > morningFloods * 1.5 && afternoonFloods > 5) {
-                insights.push(`Afternoon floods (12-5pm) outnumber morning floods ${afternoonFloods} to ${morningFloods} — likely driven by daily rain pattern`);
-              }
-              // Severity distribution
-              const highSeverity = events.filter((e) => e.peak_depth_cm > 30).length;
-              if (highSeverity > 0) insights.push(`${highSeverity} events (${Math.round((highSeverity / totalEvents) * 100)}%) reached HIGH severity (>30cm) — these pose road safety risks`);
-              // Battery health
-              const lowBatt = devices.filter((d) => (d.battery_v ?? 4) < 3.3).length;
-              if (lowBatt > 0) insights.push(`${lowBatt} sensor${lowBatt > 1 ? "s" : ""} have low battery (<3.3V) — replace soon to avoid data gaps`);
+              const lines: string[] = [];
 
-              return insights.map((insight, i) => (
-                <p key={i} className="py-1">
-                  <span className="text-status-blue mr-1.5">&#x2022;</span>
-                  {insight}
-                </p>
+              // Flooding frequency assessment
+              if (totalEvents > 10) {
+                lines.push(`This area has experienced ${totalEvents} flood events — it is one of the most flood-prone locations in the network and requires priority infrastructure attention.`);
+              } else if (totalEvents > 3) {
+                lines.push(`This area has experienced ${totalEvents} flood events, indicating recurring drainage issues that should be addressed.`);
+              } else if (totalEvents > 0) {
+                lines.push(`This area has had ${totalEvents} flood event${totalEvents > 1 ? "s" : ""} — relatively low frequency but still worth monitoring.`);
+              }
+
+              // Severity
+              if (highSeverityCount > 0) {
+                lines.push(`${highSeverityCount} of these events were HIGH severity (over 30cm) — deep enough to stall vehicles and endanger pedestrians. The worst recorded flood here reached ${maxDepth}cm.`);
+              } else if (avgDepth > 15) {
+                lines.push(`Average flood depth of ${avgDepth}cm is significant — enough to block low-lying roads and cause property damage.`);
+              }
+
+              // Compound events
+              if (compoundEvents > 0) {
+                const pct = Math.round((compoundEvents / totalEvents) * 100);
+                lines.push(`${pct}% of floods here are compound events (rain + high tide simultaneously). This means storm drains cannot discharge because tidal waterways are already elevated. Backflow preventers or tide gates on outfalls would directly address this.`);
+              }
+
+              // Peak time
+              if (peakHour.count > 0) {
+                lines.push(`Flooding peaks at ${peakHour.hour} — scheduling road closures or maintenance crews around this time would reduce risk to drivers.`);
+              }
+
+              // Elevation
+              const lowElev = devices.filter((d) => (d.altitude_baro ?? 99) < 1.0);
+              if (lowElev.length > 0) {
+                lines.push(`${lowElev.length} sensor${lowElev.length > 1 ? "s" : ""} in this area sit below 1.0m elevation — these low-lying points are natural water collection zones and are the highest priority for drainage upgrades.`);
+              }
+
+              // Rainfall threshold
+              const rainEvents = events.filter((e) => (e.rainfall_mm ?? 0) > 0);
+              if (rainEvents.length >= 3) {
+                const avgRain = rainEvents.reduce((s, e) => s + (e.rainfall_mm ?? 0), 0) / rainEvents.length;
+                const minRain = Math.min(...rainEvents.map((e) => e.rainfall_mm ?? 0));
+                lines.push(`Flooding in this area triggers at as little as ${minRain.toFixed(1)}mm of rainfall (average: ${avgRain.toFixed(1)}mm). The current drainage capacity cannot handle even moderate rain events.`);
+              }
+
+              return lines.map((line, i) => (
+                <p key={i} className="leading-relaxed">{line}</p>
               ));
             })()}
           </div>
         </div>
       )}
 
+      {/* Charts grid */}
       <div className="grid grid-cols-2 gap-6">
         {/* Weekly flood events */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
@@ -337,7 +493,8 @@ export default function AnalyticsPage() {
 
         {/* Top flooding sensors */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-4">Most Frequent Flooding Sensors</h3>
+          <h3 className="text-sm font-semibold mb-1">Worst Flooding Locations</h3>
+          <p className="text-xs text-text-secondary mb-3">Sensors with the most flood events in this area</p>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={topDevices} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -349,10 +506,10 @@ export default function AnalyticsPage() {
           </ResponsiveContainer>
         </div>
 
-        {/* Elevation vs Flood Frequency — KEY INSIGHT */}
+        {/* Elevation vs Flood Frequency */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <h3 className="text-sm font-semibold mb-1">Elevation vs Flood Frequency</h3>
-          <p className="text-xs text-text-secondary mb-3">Lower sensors flood more — identifies road dips</p>
+          <p className="text-xs text-text-secondary mb-3">Low-elevation sensors flood more — identifies road dips needing infrastructure</p>
           <ResponsiveContainer width="100%" height={250}>
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -371,7 +528,7 @@ export default function AnalyticsPage() {
         {/* Depth vs Rainfall scatter */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <h3 className="text-sm font-semibold mb-1">Flood Depth vs Rainfall</h3>
-          <p className="text-xs text-text-secondary mb-3">NOAA rainfall data correlated with sensor depth</p>
+          <p className="text-xs text-text-secondary mb-3">How much rain triggers how deep a flood in this area</p>
           <ResponsiveContainer width="100%" height={250}>
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -386,7 +543,7 @@ export default function AnalyticsPage() {
         {/* Tide vs Flood Depth */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
           <h3 className="text-sm font-semibold mb-1">Tide Level vs Flood Depth</h3>
-          <p className="text-xs text-text-secondary mb-3">NOAA tide data — high tides compound flooding</p>
+          <p className="text-xs text-text-secondary mb-3">High tides prevent drain outfall — compounds flooding in this area</p>
           <ResponsiveContainer width="100%" height={250}>
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -400,7 +557,8 @@ export default function AnalyticsPage() {
 
         {/* Events by hour of day */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-4">Flood Events by Time of Day</h3>
+          <h3 className="text-sm font-semibold mb-1">When Flooding Happens</h3>
+          <p className="text-xs text-text-secondary mb-3">Time-of-day distribution — helps schedule maintenance and closures</p>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={hourCounts}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -418,8 +576,8 @@ export default function AnalyticsPage() {
 
         {/* Compound events breakdown */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-1">Flood Trigger Breakdown</h3>
-          <p className="text-xs text-text-secondary mb-3">Rain + high tide compound events cause the worst flooding</p>
+          <h3 className="text-sm font-semibold mb-1">What Causes Flooding Here</h3>
+          <p className="text-xs text-text-secondary mb-3">Rain + high tide compound events are the most dangerous</p>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={compoundBreakdown}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -435,25 +593,10 @@ export default function AnalyticsPage() {
           </ResponsiveContainer>
         </div>
 
-        {/* Neighborhood comparison */}
-        <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-1">Flooding by Neighborhood</h3>
-          <p className="text-xs text-text-secondary mb-3">Identifies areas needing city-wide infrastructure investment</p>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={neighborhoodChart}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="name" tick={{ fill: "#9ca3af", fontSize: 9 }} angle={-20} textAnchor="end" height={40} />
-              <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey="events" name="Flood Events" fill={CHART_COLORS.red} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
         {/* Duration vs Depth */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-1">Flood Duration vs Depth</h3>
-          <p className="text-xs text-text-secondary mb-3">Deeper floods tend to last longer — identifies persistent problem areas</p>
+          <h3 className="text-sm font-semibold mb-1">How Long Floods Last</h3>
+          <p className="text-xs text-text-secondary mb-3">Deeper floods persist longer — identifies areas with poor drainage</p>
           <ResponsiveContainer width="100%" height={250}>
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -471,7 +614,8 @@ export default function AnalyticsPage() {
 
         {/* Battery health */}
         <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <h3 className="text-sm font-semibold mb-4">Fleet Battery Health</h3>
+          <h3 className="text-sm font-semibold mb-1">Sensor Battery Health</h3>
+          <p className="text-xs text-text-secondary mb-3">Low batteries cause data gaps — replace before they die</p>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={batteryBuckets}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
