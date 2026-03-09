@@ -128,6 +128,47 @@ export async function GET(request: Request) {
         return NextResponse.json(data ?? []);
       }
 
+      case "debug": {
+        // Test insert + read on flood_events to diagnose issues
+        const testEvent = {
+          device_id: "FF-001",
+          started_at: new Date().toISOString(),
+          ended_at: new Date().toISOString(),
+          peak_depth_cm: 10,
+          duration_minutes: 5,
+          rainfall_mm: null,
+          tide_level_m: null,
+        };
+        const insertResult = await supabase
+          .from("flood_events")
+          .insert(testEvent)
+          .select();
+        const readResult = await supabase
+          .from("flood_events")
+          .select("*")
+          .limit(5);
+        const countResult = await supabase
+          .from("flood_events")
+          .select("*", { count: "exact", head: true });
+        return NextResponse.json({
+          insert: {
+            data: insertResult.data,
+            error: insertResult.error?.message ?? null,
+            code: insertResult.error?.code ?? null,
+            details: insertResult.error?.details ?? null,
+            hint: insertResult.error?.hint ?? null,
+          },
+          read: {
+            count: readResult.data?.length ?? 0,
+            error: readResult.error?.message ?? null,
+          },
+          totalCount: {
+            count: countResult.count,
+            error: countResult.error?.message ?? null,
+          },
+        });
+      }
+
       default:
         return NextResponse.json(
           { error: `Unknown table: ${table}` },
