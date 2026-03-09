@@ -5,10 +5,6 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
 
-if (typeof window !== "undefined") {
-  mapboxgl.workerUrl = "https://unpkg.com/mapbox-gl@3.19.1/dist/mapbox-gl-csp-worker.js";
-}
-
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
 function elevationColor(elevation: number, min: number, max: number): string {
