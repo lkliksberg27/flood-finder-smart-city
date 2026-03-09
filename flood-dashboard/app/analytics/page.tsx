@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ScatterChart, Scatter, LineChart, Line,
   ResponsiveContainer, Cell, Legend,
 } from "recharts";
-import { Loader2 } from "lucide-react";
-import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
+import { Loader2, Filter } from "lucide-react";
+import { getAllDevices, getAllFloodEvents, getFloodEventCount30d, getNeighborhoods } from "@/lib/queries";
 import type { Device, FloodEvent } from "@/lib/types";
 
 const CHART_COLORS = {
@@ -26,18 +26,35 @@ const tooltipStyle = {
 };
 
 export default function AnalyticsPage() {
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [events, setEvents] = useState<FloodEvent[]>([]);
+  const [allDevices, setAllDevices] = useState<Device[]>([]);
+  const [allEvents, setAllEvents] = useState<FloodEvent[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
+  const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
-      getAllDevices().then(setDevices),
-      getAllFloodEvents(1000).then(setEvents),
+      getAllDevices().then(setAllDevices),
+      getAllFloodEvents(1000).then(setAllEvents),
       getFloodEventCount30d().then(setFloodCounts),
+      getNeighborhoods().then(setNeighborhoods),
     ]).catch(console.error).finally(() => setLoading(false));
   }, []);
+
+  // Filter devices and events by selected neighborhood
+  const devices = useMemo(() => {
+    if (!selectedNeighborhood) return allDevices;
+    return allDevices.filter((d) => d.neighborhood === selectedNeighborhood);
+  }, [allDevices, selectedNeighborhood]);
+
+  const events = useMemo(() => {
+    if (!selectedNeighborhood) return allEvents;
+    return allEvents.filter((e) => {
+      const dev = e.devices as Device | undefined;
+      return dev?.neighborhood === selectedNeighborhood;
+    });
+  }, [allEvents, selectedNeighborhood]);
 
   // 1. Flood events per week (last 6 months)
   const sixMonthsAgo = Date.now() - 180 * 86400 * 1000;
@@ -94,7 +111,7 @@ export default function AnalyticsPage() {
     bucket.count++;
   });
 
-  // 6. NEW: Elevation vs Flood Frequency — shows correlation between low elevation and floods
+  // 6. Elevation vs Flood Frequency
   const elevationFloodData = devices
     .filter((d) => d.altitude_baro != null)
     .map((d) => ({
@@ -104,7 +121,7 @@ export default function AnalyticsPage() {
     }))
     .sort((a, b) => a.elevation - b.elevation);
 
-  // 7. NEW: Tide level vs flood depth correlation
+  // 7. Tide level vs flood depth correlation
   const tideFloodData = events
     .filter((e) => e.tide_level_m != null)
     .map((e) => ({
@@ -175,10 +192,37 @@ export default function AnalyticsPage() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-2">Analytics & Patterns</h2>
-      <p className="text-sm text-text-secondary mb-6">
-        Data-driven flood pattern analysis across {devices.length} sensors
-      </p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-semibold">Analytics & Patterns</h2>
+          <p className="text-sm text-text-secondary mt-1">
+            {selectedNeighborhood
+              ? `Flood analysis for ${selectedNeighborhood} — ${devices.length} sensors, ${totalEvents} events`
+              : `Data-driven flood pattern analysis across ${allDevices.length} sensors`}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Filter size={16} className="text-text-secondary" />
+          <select
+            value={selectedNeighborhood}
+            onChange={(e) => setSelectedNeighborhood(e.target.value)}
+            className="bg-bg-card border border-border-card rounded-lg px-3 py-2 text-sm text-text-primary min-w-[180px]"
+          >
+            <option value="">All Neighborhoods</option>
+            {neighborhoods.map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+          {selectedNeighborhood && (
+            <button
+              onClick={() => setSelectedNeighborhood("")}
+              className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Summary stats */}
       <div className="grid grid-cols-5 gap-4 mb-6">

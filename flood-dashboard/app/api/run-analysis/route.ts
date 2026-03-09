@@ -91,8 +91,11 @@ function analyzeGradients(devices: DeviceRow[]) {
   });
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const neighborhoodFilter = searchParams.get("neighborhood") || "";
+
     const supabase = createServiceClient();
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
 
@@ -106,11 +109,21 @@ export async function POST() {
 
     if (eventsRes.error) throw new Error(eventsRes.error.message);
 
-    const events = (eventsRes.data ?? []) as unknown as EventRow[];
-    const allDevices = (devicesRes.data ?? []) as DeviceRow[];
+    let events = (eventsRes.data ?? []) as unknown as EventRow[];
+    let allDevices = (devicesRes.data ?? []) as DeviceRow[];
+
+    // Filter by neighborhood if specified
+    if (neighborhoodFilter) {
+      allDevices = allDevices.filter((d) => d.neighborhood === neighborhoodFilter);
+      const deviceIds = new Set(allDevices.map((d) => d.device_id));
+      events = events.filter((e) => deviceIds.has(e.device_id));
+    }
 
     if (events.length === 0) {
-      return NextResponse.json({ message: "No flood events in last 30 days" }, { status: 200 });
+      const msg = neighborhoodFilter
+        ? `No flood events in ${neighborhoodFilter} in the last 30 days`
+        : "No flood events in last 30 days";
+      return NextResponse.json({ message: msg }, { status: 200 });
     }
 
     // ── 1. Per-sensor flood profile ─────────────────────────────
@@ -262,7 +275,10 @@ export async function POST() {
       messages: [{
         role: "user",
         content: `You are a senior urban flood infrastructure engineer consulting for the City of Aventura, Florida.
-You are analyzing 30 days of real-time data from ${allDevices.length} IoT flood sensors mounted on mailboxes across the city.
+${neighborhoodFilter
+  ? `You are analyzing 30 days of data SPECIFICALLY for the ${neighborhoodFilter} neighborhood — ${allDevices.length} sensors in this area.
+Focus all recommendations on this neighborhood's specific conditions, drainage patterns, and infrastructure needs.`
+  : `You are analyzing 30 days of real-time data from ${allDevices.length} IoT flood sensors mounted on mailboxes across the city.`}
 Each sensor uses an ultrasonic distance sensor to detect water depth, a BMP390 barometric altimeter for precision elevation (±0.25m), and GPS.
 NOAA weather and tide data is automatically correlated with each flood event.
 
@@ -368,9 +384,10 @@ Generate 6-8 recommendations ordered by priority, mixing all data sources for va
     }
 
     for (const rec of parsed.recommendations) {
+      const neighborhoodTag = neighborhoodFilter ? `[${neighborhoodFilter}] ` : "";
       const fullText = rec.title
-        ? `## ${rec.title}\n\n${rec.text}${rec.estimated_cost ? `\n\nEstimated cost: ${rec.estimated_cost}` : ""}${rec.estimated_reduction_pct ? ` | Estimated flood reduction: ${rec.estimated_reduction_pct}%` : ""}`
-        : rec.text;
+        ? `## ${neighborhoodTag}${rec.title}\n\n${rec.text}${rec.estimated_cost ? `\n\nEstimated cost: ${rec.estimated_cost}` : ""}${rec.estimated_reduction_pct ? ` | Estimated flood reduction: ${rec.estimated_reduction_pct}%` : ""}`
+        : `${neighborhoodTag}${rec.text}`;
 
       await supabase.from("infrastructure_recommendations").insert({
         analysis_period_days: 30,
@@ -381,8 +398,9 @@ Generate 6-8 recommendations ordered by priority, mixing all data sources for va
       });
     }
 
+    const scope = neighborhoodFilter ? ` for ${neighborhoodFilter}` : "";
     return NextResponse.json({
-      message: `Generated ${parsed.recommendations.length} recommendations`,
+      message: `Generated ${parsed.recommendations.length} recommendations${scope}`,
       summary: parsed.summary ?? null,
     });
   } catch (err) {
