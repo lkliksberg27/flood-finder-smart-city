@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import mapboxgl from "mapbox-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
 import { getReadings24h } from "@/lib/queries";
 import { getSupabase } from "@/lib/supabase";
+
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
 const STATUS_COLORS: Record<string, string> = {
   online: "#34d399",
@@ -25,9 +27,8 @@ function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): str
     return `${x},${y}`;
   }).join(" ");
 
-  // Fill area under curve
   const firstX = 0;
-  const lastX = (values.length - 1) / (values.length - 1) * w;
+  const lastX = w;
   const fillPoints = `${firstX},${h} ${points} ${lastX},${h}`;
 
   return `
@@ -51,33 +52,17 @@ interface Props {
 }
 
 export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%" }: Props) {
-  const mapRef = useRef<L.Map | null>(null);
-  const markersRef = useRef<L.Layer[]>([]);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const popupRef = useRef<mapboxgl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const devicesRef = useRef<Device[]>(devices);
+  const onDeviceClickRef = useRef(onDeviceClick);
 
-  useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+  devicesRef.current = devices;
+  onDeviceClickRef.current = onDeviceClick;
 
-    mapRef.current = L.map(containerRef.current, {
-      center: [25.9565, -80.1392],
-      zoom: 14,
-      zoomControl: true,
-    });
-
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-      maxZoom: 19,
-    }).addTo(mapRef.current);
-
-    return () => {
-      mapRef.current?.remove();
-      mapRef.current = null;
-    };
-  }, []);
-
-  const loadPopupData = useCallback(async (deviceId: string, popup: L.Popup) => {
+  const loadPopupData = useCallback(async (deviceId: string) => {
     try {
-      // Fetch 24h readings and recent flood events in parallel
       const [readings, floodRes] = await Promise.all([
         getReadings24h(deviceId),
         getSupabase()
@@ -88,24 +73,21 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           .limit(5),
       ]);
 
-      const container = popup.getElement()?.querySelector(`[data-popup-data="${deviceId}"]`);
+      const container = document.querySelector(`[data-popup-data="${deviceId}"]`);
       if (!container) return;
 
       let html = "";
 
-      // Distance + flood depth sparklines
       if (readings.length >= 2) {
         const distances = readings.map((r) => r.distance_cm ?? 0);
         html += buildSparklineSVG(distances, "#3b82f6", "24h Distance (cm)");
 
-        // Show flood depth sparkline if any flooding detected
         const floodDepths = readings.map((r) => r.flood_depth_cm ?? 0);
         if (floodDepths.some((d) => d > 0)) {
           html += buildSparklineSVG(floodDepths, "#f87171", "24h Flood Depth (cm)");
         }
       }
 
-      // Recent flood events
       const events = floodRes.data ?? [];
       if (events.length > 0) {
         html += `<div style="margin-top:8px;border-top:1px solid #1f2937;padding-top:6px">`;
@@ -133,38 +115,164 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     }
   }, []);
 
+  // Initialize map once
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!containerRef.current || mapRef.current) return;
 
-    markersRef.current.forEach((m) => m.remove());
-    markersRef.current = [];
+    mapboxgl.accessToken = MAPBOX_TOKEN;
+
+    mapRef.current = new mapboxgl.Map({
+      container: containerRef.current,
+      style: "mapbox://styles/mapbox/dark-v11",
+      center: [-80.1392, 25.9565],
+      zoom: 14,
+      attributionControl: false,
+      pitchWithRotate: false,
+      dragRotate: false,
+    });
+
+    const map = mapRef.current;
+
+    map.on("load", () => {
+      // Add empty GeoJSON sources for devices
+      map.addSource("device-alerts", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addSource("device-dots", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+
+      // Alert rings (larger semi-transparent circles for alerting sensors)
+      map.addLayer({
+        id: "device-alert-rings",
+        type: "circle",
+        source: "device-alerts",
+        paint: {
+          "circle-radius": 22,
+          "circle-color": "#f87171",
+          "circle-opacity": 0.15,
+        },
+      });
+
+      // Device dots
+      map.addLayer({
+        id: "device-dots-layer",
+        type: "circle",
+        source: "device-dots",
+        paint: {
+          "circle-radius": ["case",
+            ["==", ["get", "highlighted"], true], 12,
+            ["==", ["get", "status"], "alert"], 10,
+            7
+          ],
+          "circle-color": ["get", "color"],
+          "circle-stroke-width": ["case",
+            ["==", ["get", "highlighted"], true], 3,
+            1
+          ],
+          "circle-stroke-color": ["case",
+            ["==", ["get", "highlighted"], true], "#ffffff",
+            ["get", "color"]
+          ],
+          "circle-opacity": 0.85,
+        },
+      });
+
+      // Click handler for device dots
+      map.on("click", "device-dots-layer", (e) => {
+        if (!e.features?.[0]) return;
+        const props = e.features[0].properties;
+        if (!props) return;
+        const deviceId = props.device_id;
+        const device = devicesRef.current.find((d) => d.device_id === deviceId);
+        if (device) onDeviceClickRef.current?.(device);
+
+        const color = props.color;
+        const lastSeenText = props.last_seen_text;
+        const battV = props.battery_v ?? 0;
+        const battPct = Math.max(0, Math.min(100, ((battV - 2.8) / 1.4) * 100));
+        const battColor = battPct > 60 ? "#34d399" : battPct > 25 ? "#fbbf24" : "#f87171";
+
+        const popupHTML = `
+          <div style="font-family:'DM Sans',sans-serif;min-width:220px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <strong style="font-size:14px">${props.device_id}</strong>
+              <span style="font-size:10px;color:${color};background:${color}22;padding:1px 6px;border-radius:4px;font-weight:600">${(props.status || "").toUpperCase()}</span>
+            </div>
+            ${props.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${props.name}</div>` : ""}
+            <hr style="border-color:#1f2937;margin:8px 0"/>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
+              <div>
+                <span style="color:#6b7280">Elevation</span><br/>
+                <span style="font-weight:600">${props.altitude_baro ?? "—"}m</span>
+              </div>
+              <div>
+                <span style="color:#6b7280">Last Seen</span><br/>
+                <span style="font-weight:600">${lastSeenText}</span>
+              </div>
+              <div>
+                <span style="color:#6b7280">Battery</span><br/>
+                <div style="display:flex;align-items:center;gap:4px;margin-top:2px">
+                  <div style="flex:1;height:4px;background:#1f2937;border-radius:2px;overflow:hidden">
+                    <div style="width:${battPct}%;height:100%;background:${battColor};border-radius:2px"></div>
+                  </div>
+                  <span style="font-size:10px;font-weight:600">${Number(battV).toFixed(1)}V</span>
+                </div>
+              </div>
+              ${props.neighborhood ? `<div>
+                <span style="color:#6b7280">Area</span><br/>
+                <span style="font-weight:600">${props.neighborhood}</span>
+              </div>` : ""}
+            </div>
+            <div data-popup-data="${props.device_id}" style="margin-top:4px">
+              <div style="font-size:10px;color:#6b7280;margin-top:6px;display:flex;align-items:center;gap:4px">
+                <div style="width:12px;height:12px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>
+                Loading data...
+              </div>
+            </div>
+          </div>
+          <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+        `;
+
+        if (popupRef.current) popupRef.current.remove();
+        const coords = (e.features[0].geometry as GeoJSON.Point).coordinates.slice() as [number, number];
+        popupRef.current = new mapboxgl.Popup({ closeButton: false, offset: 12 })
+          .setLngLat(coords)
+          .setHTML(popupHTML)
+          .addTo(map);
+
+        loadPopupData(deviceId);
+      });
+
+      // Cursor pointer on hover
+      map.on("mouseenter", "device-dots-layer", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "device-dots-layer", () => {
+        map.getCanvas().style.cursor = "";
+      });
+    });
+
+    return () => {
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
+  }, [loadPopupData]);
+
+  // Update sources when devices change
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    const alertFeatures: GeoJSON.Feature[] = [];
+    const dotFeatures: GeoJSON.Feature[] = [];
 
     devices.forEach((device) => {
       const color = STATUS_COLORS[device.status] ?? "#6b7280";
-      const isAlert = device.status === "alert";
       const isHighlighted = device.device_id === highlightDeviceId;
 
-      // Add a larger semi-transparent ring for alert sensors
-      if (isAlert) {
-        const ring = L.circleMarker([device.lat, device.lng], {
-          radius: 18,
-          fillColor: "#f87171",
-          color: "transparent",
-          fillOpacity: 0.15,
-        }).addTo(mapRef.current!);
-        markersRef.current.push(ring);
-      }
-
-      const marker = L.circleMarker([device.lat, device.lng], {
-        radius: isHighlighted ? 12 : isAlert ? 10 : 7,
-        fillColor: color,
-        color: isHighlighted ? "#ffffff" : color,
-        weight: isHighlighted ? 3 : 1,
-        fillOpacity: 0.85,
-        className: isAlert ? "marker-alert" : "",
-      }).addTo(mapRef.current!);
-
-      // Time since last seen
       const lastSeenText = device.last_seen
         ? (() => {
             const ms = Date.now() - new Date(device.last_seen).getTime();
@@ -175,73 +283,44 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           })()
         : "never";
 
-      // Battery bar color
-      const battV = device.battery_v ?? 0;
-      const battPct = Math.max(0, Math.min(100, ((battV - 2.8) / 1.4) * 100));
-      const battColor = battPct > 60 ? "#34d399" : battPct > 25 ? "#fbbf24" : "#f87171";
+      if (device.status === "alert") {
+        alertFeatures.push({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [device.lng, device.lat] },
+          properties: {},
+        });
+      }
 
-      const popup = L.popup({ maxWidth: 260 }).setContent(`
-        <div style="font-family:'DM Sans',sans-serif;min-width:220px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <strong style="font-size:14px">${device.device_id}</strong>
-            <span style="font-size:10px;color:${color};background:${color}22;padding:1px 6px;border-radius:4px;font-weight:600">${device.status.toUpperCase()}</span>
-          </div>
-          ${device.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${device.name}</div>` : ""}
-
-          <hr style="border-color:#1f2937;margin:8px 0"/>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
-            <div>
-              <span style="color:#6b7280">Elevation</span><br/>
-              <span style="font-weight:600">${device.altitude_baro?.toFixed(2) ?? "—"}m</span>
-            </div>
-            <div>
-              <span style="color:#6b7280">Last Seen</span><br/>
-              <span style="font-weight:600">${lastSeenText}</span>
-            </div>
-            <div>
-              <span style="color:#6b7280">Battery</span><br/>
-              <div style="display:flex;align-items:center;gap:4px;margin-top:2px">
-                <div style="flex:1;height:4px;background:#1f2937;border-radius:2px;overflow:hidden">
-                  <div style="width:${battPct}%;height:100%;background:${battColor};border-radius:2px"></div>
-                </div>
-                <span style="font-size:10px;font-weight:600">${battV.toFixed(1)}V</span>
-              </div>
-            </div>
-            ${device.neighborhood ? `<div>
-              <span style="color:#6b7280">Area</span><br/>
-              <span style="font-weight:600">${device.neighborhood}</span>
-            </div>` : ""}
-          </div>
-
-          <div data-popup-data="${device.device_id}" style="margin-top:4px">
-            <div style="font-size:10px;color:#6b7280;margin-top:6px;display:flex;align-items:center;gap:4px">
-              <div style="width:12px;height:12px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>
-              Loading data...
-            </div>
-          </div>
-        </div>
-        <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
-      `);
-
-      marker.bindPopup(popup);
-
-      marker.on("popupopen", () => {
-        loadPopupData(device.device_id, popup);
+      dotFeatures.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [device.lng, device.lat] },
+        properties: {
+          device_id: device.device_id,
+          name: device.name ?? "",
+          status: device.status,
+          color,
+          highlighted: isHighlighted,
+          altitude_baro: device.altitude_baro?.toFixed(2) ?? "—",
+          battery_v: device.battery_v ?? 0,
+          neighborhood: device.neighborhood ?? "",
+          last_seen_text: lastSeenText,
+        },
       });
-
-      marker.on("click", () => onDeviceClick?.(device));
-      markersRef.current.push(marker);
     });
 
-    // Fit bounds if we have devices and map is at default
-    if (devices.length > 0 && mapRef.current.getZoom() === 14) {
-      const bounds = L.latLngBounds(devices.map((d) => [d.lat, d.lng]));
-      if (bounds.isValid()) {
-        mapRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
-      }
+    const alertSrc = map.getSource("device-alerts") as mapboxgl.GeoJSONSource | undefined;
+    const dotSrc = map.getSource("device-dots") as mapboxgl.GeoJSONSource | undefined;
+
+    if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alertFeatures });
+    if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
+
+    // Fit bounds if we have devices
+    if (devices.length > 0 && map.getZoom() === 14) {
+      const bounds = new mapboxgl.LngLatBounds();
+      devices.forEach((d) => bounds.extend([d.lng, d.lat]));
+      map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
     }
-  }, [devices, onDeviceClick, highlightDeviceId, loadPopupData]);
+  }, [devices, highlightDeviceId]);
 
   return (
     <div style={{ position: "relative", height, width: "100%" }}>
