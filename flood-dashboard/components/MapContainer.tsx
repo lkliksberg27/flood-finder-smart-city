@@ -8,7 +8,6 @@ import { getReadings24h } from "@/lib/queries";
 import { getSupabase } from "@/lib/supabase";
 
 // Fix Mapbox GL v3 tile loading in production (Web Workers need explicit URL)
-// @ts-expect-error - workerUrl is valid in mapbox-gl v3
 mapboxgl.workerUrl = "https://unpkg.com/mapbox-gl@3.19.1/dist/mapbox-gl-csp-worker.js";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
