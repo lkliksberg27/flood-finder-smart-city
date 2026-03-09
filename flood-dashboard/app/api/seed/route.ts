@@ -84,7 +84,6 @@ export async function POST() {
         started_at: startedAt.toISOString(),
         ended_at: endedAt.toISOString(),
         peak_depth_cm: peakDepth,
-        duration_minutes: durationMin,
         rainfall_mm: hasRain ? parseFloat(randomBetween(2, 45).toFixed(1)) : null,
         tide_level_m: hasTide ? parseFloat(randomBetween(0.1, 0.8).toFixed(2)) : null,
       });
