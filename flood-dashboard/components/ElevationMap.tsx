@@ -5,7 +5,9 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
 
-mapboxgl.workerUrl = "https://unpkg.com/mapbox-gl@3.19.1/dist/mapbox-gl-csp-worker.js";
+if (typeof window !== "undefined") {
+  mapboxgl.workerUrl = "https://unpkg.com/mapbox-gl@3.19.1/dist/mapbox-gl-csp-worker.js";
+}
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
