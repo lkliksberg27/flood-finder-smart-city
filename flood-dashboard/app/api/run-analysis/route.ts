@@ -95,8 +95,39 @@ export async function POST(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const neighborhoodFilter = searchParams.get("neighborhood") || "";
+    const forceRefresh = searchParams.get("force") === "true";
 
     const supabase = createServiceClient();
+
+    // Check for cached analysis (within 7 days) unless force refresh
+    if (!forceRefresh) {
+      let cacheQuery = supabase
+        .from("infrastructure_recommendations")
+        .select("generated_at")
+        .order("generated_at", { ascending: false })
+        .limit(1);
+
+      if (neighborhoodFilter) {
+        cacheQuery = cacheQuery.ilike("recommendation_text", `%[${neighborhoodFilter}]%`);
+      }
+
+      const { data: cacheData } = await cacheQuery;
+      if (cacheData?.[0]) {
+        const daysAgo = Math.floor(
+          (Date.now() - new Date(cacheData[0].generated_at).getTime()) / 86400000
+        );
+        if (daysAgo < 7) {
+          const daysUntil = 7 - daysAgo;
+          return NextResponse.json({
+            message: `Using cached analysis from ${daysAgo === 0 ? "today" : `${daysAgo} day${daysAgo > 1 ? "s" : ""} ago`}`,
+            cached: true,
+            daysAgo,
+            daysUntilRefresh: daysUntil,
+          });
+        }
+      }
+    }
+
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
 
     const [eventsRes, devicesRes] = await Promise.all([

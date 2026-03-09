@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, Suspense } from "react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ScatterChart, Scatter, LineChart, Line,
   ResponsiveContainer, Cell, Legend,
 } from "recharts";
-import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp } from "lucide-react";
+import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp, Search } from "lucide-react";
 import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, FloodEvent } from "@/lib/types";
 
@@ -42,6 +43,52 @@ interface AreaSummary {
   riskLevel: "critical" | "high" | "moderate" | "low";
 }
 
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+interface DipInfo {
+  device_id: string;
+  name: string | null;
+  elevation_m: number;
+  avgNeighborElev: number;
+  dipCm: number;
+  floodCount: number;
+}
+
+function findRoadDips(devices: Device[], floodCounts: Record<string, number>): DipInfo[] {
+  const withElev = devices.filter((d) => d.altitude_baro != null);
+  if (withElev.length < 3) return [];
+
+  return withElev.map((d) => {
+    const neighbors = withElev
+      .filter((n) => n.device_id !== d.device_id)
+      .map((n) => ({ ...n, dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 3);
+
+    const avgNeighborElev = neighbors.reduce((s, n) => s + (n.altitude_baro ?? 0), 0) / neighbors.length;
+    const diff = (d.altitude_baro ?? 0) - avgNeighborElev;
+
+    return {
+      device_id: d.device_id,
+      name: d.name,
+      elevation_m: d.altitude_baro ?? 0,
+      avgNeighborElev: parseFloat(avgNeighborElev.toFixed(2)),
+      dipCm: Math.round(-diff * 100),
+      floodCount: floodCounts[d.device_id] ?? 0,
+    };
+  })
+    .filter((d) => d.dipCm > 10)
+    .sort((a, b) => b.dipCm - a.dipCm);
+}
+
 function computeRisk(events: number, avgDepth: number, compoundEvents: number): "critical" | "high" | "moderate" | "low" {
   const score = events * 3 + avgDepth * 0.5 + compoundEvents * 5;
   if (score > 50) return "critical";
@@ -58,11 +105,31 @@ const RISK_STYLES = {
 };
 
 export default function AnalyticsPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <Loader2 size={32} className="animate-spin text-status-blue" />
+      </div>
+    }>
+      <AnalyticsContent />
+    </Suspense>
+  );
+}
+
+function AnalyticsContent() {
+  const searchParams = useSearchParams();
   const [allDevices, setAllDevices] = useState<Device[]>([]);
   const [allEvents, setAllEvents] = useState<FloodEvent[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [selectedArea, setSelectedArea] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [areaSearch, setAreaSearch] = useState("");
+
+  // Handle URL param for direct navigation from search
+  useEffect(() => {
+    const area = searchParams.get("area");
+    if (area) setSelectedArea(area);
+  }, [searchParams]);
 
   useEffect(() => {
     Promise.all([
@@ -152,9 +219,21 @@ export default function AnalyticsPage() {
     return (
       <div>
         <h2 className="text-xl font-semibold mb-1">Flood Analytics</h2>
-        <p className="text-sm text-text-secondary mb-6">
+        <p className="text-sm text-text-secondary mb-4">
           Select a neighborhood to view detailed flood patterns, risk factors, and infrastructure insights for that area.
         </p>
+
+        {/* Search areas */}
+        <div className="relative mb-6">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
+          <input
+            type="text"
+            value={areaSearch}
+            onChange={(e) => setAreaSearch(e.target.value)}
+            placeholder="Search neighborhoods..."
+            className="bg-bg-card border border-border-card rounded-lg pl-8 pr-3 py-2 text-sm text-text-primary w-72"
+          />
+        </div>
 
         {/* City-wide quick stats */}
         <div className="grid grid-cols-4 gap-4 mb-8">
@@ -190,7 +269,7 @@ export default function AnalyticsPage() {
 
         {/* Area cards */}
         <div className="grid grid-cols-2 gap-4">
-          {areas.map((area) => {
+          {areas.filter((a) => !areaSearch || a.name.toLowerCase().includes(areaSearch.toLowerCase())).map((area) => {
             const style = RISK_STYLES[area.riskLevel];
             return (
               <button
@@ -490,6 +569,106 @@ export default function AnalyticsPage() {
           </div>
         </div>
       )}
+
+      {/* Elevation & Road Dip Insights */}
+      {(() => {
+        const dips = findRoadDips(devices, floodCounts);
+        const withElev = devices.filter((d) => d.altitude_baro != null);
+        if (withElev.length === 0) return null;
+
+        const elevs = withElev.map((d) => d.altitude_baro!);
+        const minElev = Math.min(...elevs);
+        const maxElev = Math.max(...elevs);
+        const avgElev = (elevs.reduce((s, e) => s + e, 0) / elevs.length).toFixed(2);
+
+        return (
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            {/* Elevation summary */}
+            <div className="bg-bg-card border border-border-card rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                Elevation Profile
+              </h3>
+              <div className="grid grid-cols-3 gap-3 text-xs mb-3">
+                <div>
+                  <p className="text-text-secondary">Lowest</p>
+                  <p className={`text-base font-bold ${minElev < 1.0 ? "text-status-red" : "text-status-amber"}`}>
+                    {minElev.toFixed(2)}m
+                  </p>
+                </div>
+                <div>
+                  <p className="text-text-secondary">Average</p>
+                  <p className="text-base font-bold">{avgElev}m</p>
+                </div>
+                <div>
+                  <p className="text-text-secondary">Highest</p>
+                  <p className="text-base font-bold text-status-green">{maxElev.toFixed(2)}m</p>
+                </div>
+              </div>
+              {/* Sensor elevation list */}
+              <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
+                {withElev
+                  .sort((a, b) => (a.altitude_baro ?? 0) - (b.altitude_baro ?? 0))
+                  .map((d) => (
+                    <div key={d.device_id} className="flex items-center justify-between text-xs">
+                      <span className="text-text-secondary truncate max-w-[120px]">{d.name ?? d.device_id}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`font-medium ${
+                          (d.altitude_baro ?? 0) < 1.0 ? "text-status-red" :
+                          (d.altitude_baro ?? 0) < 1.5 ? "text-status-amber" : ""
+                        }`}>
+                          {d.altitude_baro?.toFixed(2)}m
+                        </span>
+                        {(floodCounts[d.device_id] ?? 0) > 0 && (
+                          <span className="text-status-red">{floodCounts[d.device_id]} floods</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            {/* Road dips */}
+            <div className="bg-bg-card border border-border-card rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <AlertTriangle size={14} className="text-status-amber" />
+                Road Dips Detected
+                <span className="ml-auto text-xs font-normal text-text-secondary">{dips.length} found</span>
+              </h3>
+              {dips.length === 0 ? (
+                <p className="text-xs text-text-secondary">No significant road dips detected in this area. All sensors are at relatively even elevation.</p>
+              ) : (
+                <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                  {dips.map((d) => (
+                    <div key={d.device_id} className="bg-bg-primary rounded p-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-mono">{d.device_id}</span>
+                        <span className="text-xs font-bold text-status-red">-{d.dipCm}cm</span>
+                      </div>
+                      <div className="flex items-center justify-between mt-1 text-[11px] text-text-secondary">
+                        <span>{d.name ?? ""}</span>
+                        <span>{d.elevation_m.toFixed(2)}m (neighbors avg: {d.avgNeighborElev}m)</span>
+                      </div>
+                      {d.floodCount > 0 && (
+                        <div className="mt-1.5 h-1.5 bg-bg-card rounded overflow-hidden">
+                          <div
+                            className="h-full bg-status-red/60 rounded"
+                            style={{ width: `${Math.min(100, d.floodCount * 15)}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {dips.length > 0 && (
+                <p className="text-[10px] text-text-secondary mt-2">
+                  Road dips collect water during rain events. Lower dips correlate with more flooding.
+                </p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Neighborhood flood map */}
       <div className="h-[350px] rounded-lg overflow-hidden border border-border-card mb-6">

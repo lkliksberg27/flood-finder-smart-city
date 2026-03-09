@@ -101,12 +101,51 @@ export async function GET(request: Request) {
       }
 
       case "recommendations": {
-        const { data, error } = await supabase
+        const neighborhood = searchParams.get("neighborhood") || "";
+        let query = supabase
           .from("infrastructure_recommendations")
           .select("*")
           .order("generated_at", { ascending: false });
+
+        // If neighborhood filter, only return recs that mention it in the text
+        if (neighborhood) {
+          query = query.ilike("recommendation_text", `%${neighborhood}%`);
+        }
+
+        const { data, error } = await query;
         if (error) throw error;
         return NextResponse.json(data ?? []);
+      }
+
+      case "last_analysis": {
+        // Check when the last analysis was run
+        const neighborhood = searchParams.get("neighborhood") || "";
+        let query = supabase
+          .from("infrastructure_recommendations")
+          .select("generated_at")
+          .order("generated_at", { ascending: false })
+          .limit(1);
+
+        if (neighborhood) {
+          query = query.ilike("recommendation_text", `%[${neighborhood}]%`);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+
+        const lastAnalysis = data?.[0]?.generated_at ?? null;
+        const daysAgo = lastAnalysis
+          ? Math.floor((Date.now() - new Date(lastAnalysis).getTime()) / 86400000)
+          : null;
+        const daysUntilRefresh = daysAgo !== null ? Math.max(0, 7 - daysAgo) : null;
+        const isCached = daysAgo !== null && daysAgo < 7;
+
+        return NextResponse.json({
+          lastAnalysis,
+          daysAgo,
+          daysUntilRefresh,
+          isCached,
+        });
       }
 
       case "sensor_readings": {
