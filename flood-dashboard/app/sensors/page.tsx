@@ -1,19 +1,33 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { Download, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
 import { getAllDevices, getLatestReadings, getNeighborhoods, getFloodEventCount30d } from "@/lib/queries";
 import type { Device, SensorReading } from "@/lib/types";
 
 export default function SensorsPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-[calc(100vh-120px)]">
+        <Loader2 size={32} className="animate-spin text-status-blue" />
+      </div>
+    }>
+      <SensorsContent />
+    </Suspense>
+  );
+}
+
+function SensorsContent() {
+  const searchParams = useSearchParams();
   const [devices, setDevices] = useState<Device[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [filterNeighborhood, setFilterNeighborhood] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterLowBattery, setFilterLowBattery] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(searchParams.get("search") ?? "");
   const [sortCol, setSortCol] = useState<string>("device_id");
   const [sortAsc, setSortAsc] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
