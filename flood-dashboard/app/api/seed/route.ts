@@ -91,10 +91,17 @@ export async function POST() {
     }
 
     // Insert in batches
+    const floodErrors: string[] = [];
+    let floodInserted = 0;
     for (let i = 0; i < floodEvents.length; i += 20) {
       const batch = floodEvents.slice(i, i + 20);
-      const { error } = await supabase.from("flood_events").insert(batch);
-      if (error) console.error("[SEED] Flood events batch error:", error.message);
+      const { error, data: inserted } = await supabase.from("flood_events").insert(batch).select("id");
+      if (error) {
+        floodErrors.push(error.message);
+        console.error("[SEED] Flood events batch error:", error.message);
+      } else {
+        floodInserted += inserted?.length ?? batch.length;
+      }
     }
 
     // ── 3. Seed some sensor readings for recent 24h ────
@@ -125,13 +132,22 @@ export async function POST() {
       }
     }
 
+    const readingErrors: string[] = [];
+    let readingsInserted = 0;
     for (let i = 0; i < readings.length; i += 50) {
       const batch = readings.slice(i, i + 50);
-      await supabase.from("sensor_readings").insert(batch);
+      const { error, data: inserted } = await supabase.from("sensor_readings").insert(batch).select("id");
+      if (error) {
+        readingErrors.push(error.message);
+      } else {
+        readingsInserted += inserted?.length ?? batch.length;
+      }
     }
 
     return NextResponse.json({
-      message: `Seeded ${devices.length} devices, ${floodEvents.length} flood events, ${readings.length} readings`,
+      message: `Seeded ${devices.length} devices, ${floodInserted}/${floodEvents.length} flood events, ${readingsInserted}/${readings.length} readings`,
+      floodErrors: floodErrors.length > 0 ? floodErrors : undefined,
+      readingErrors: readingErrors.length > 0 ? readingErrors : undefined,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Seed failed";
