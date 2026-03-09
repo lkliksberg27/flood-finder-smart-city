@@ -1,7 +1,7 @@
 import { getSupabase } from './supabase';
 import type { Device, SensorReading, FloodEvent, Recommendation } from './types';
 
-// ── Devices ─────────────────────────────────────────────────
+// ── Devices (anon key works — RLS allows SELECT) ────────────
 export async function getAllDevices(): Promise<Device[]> {
   const { data, error } = await getSupabase()
     .from('devices')
@@ -23,14 +23,9 @@ export async function getDevice(deviceId: string): Promise<Device | null> {
 
 // ── Sensor Readings ─────────────────────────────────────────
 export async function getLatestReadings(deviceId: string, limit = 10): Promise<SensorReading[]> {
-  const { data, error } = await getSupabase()
-    .from('sensor_readings')
-    .select('*')
-    .eq('device_id', deviceId)
-    .order('recorded_at', { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(error.message);
-  return data ?? [];
+  const res = await fetch(`/api/data?table=sensor_readings&device_id=${encodeURIComponent(deviceId)}&limit=${limit}`);
+  if (!res.ok) throw new Error('Failed to fetch readings');
+  return res.json();
 }
 
 export async function getReadings24h(deviceId: string): Promise<Pick<SensorReading, 'distance_cm' | 'flood_depth_cm' | 'recorded_at'>[]> {
@@ -45,25 +40,17 @@ export async function getReadings24h(deviceId: string): Promise<Pick<SensorReadi
   return data ?? [];
 }
 
-// ── Flood Events ────────────────────────────────────────────
+// ── Flood Events (use server API to bypass RLS) ─────────────
 export async function getActiveFloodEvents(): Promise<FloodEvent[]> {
-  const { data, error } = await getSupabase()
-    .from('flood_events')
-    .select('*, devices(*)')
-    .is('ended_at', null)
-    .order('started_at', { ascending: false });
-  if (error) throw new Error(error.message);
-  return data ?? [];
+  const res = await fetch('/api/data?table=active_flood_events');
+  if (!res.ok) throw new Error('Failed to fetch active flood events');
+  return res.json();
 }
 
 export async function getAllFloodEvents(limit = 200): Promise<FloodEvent[]> {
-  const { data, error } = await getSupabase()
-    .from('flood_events')
-    .select('*, devices(*)')
-    .order('started_at', { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(error.message);
-  return data ?? [];
+  const res = await fetch(`/api/data?table=flood_events&limit=${limit}`);
+  if (!res.ok) throw new Error('Failed to fetch flood events');
+  return res.json();
 }
 
 export async function getFloodEventsFiltered(filters: {
@@ -72,22 +59,21 @@ export async function getFloodEventsFiltered(filters: {
   endDate?: string;
   minDepth?: number;
 }): Promise<FloodEvent[]> {
-  let query = getSupabase()
-    .from('flood_events')
-    .select('*, devices(*)')
-    .order('started_at', { ascending: false });
+  const events = await getAllFloodEvents(1000);
+  let results = events;
 
-  if (filters.startDate) query = query.gte('started_at', filters.startDate);
-  if (filters.endDate) query = query.lte('started_at', filters.endDate);
-  if (filters.minDepth) query = query.gte('peak_depth_cm', filters.minDepth);
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-
-  let results = data ?? [];
+  if (filters.startDate) {
+    results = results.filter((e) => e.started_at >= filters.startDate!);
+  }
+  if (filters.endDate) {
+    results = results.filter((e) => e.started_at <= filters.endDate!);
+  }
+  if (filters.minDepth) {
+    results = results.filter((e) => e.peak_depth_cm >= filters.minDepth!);
+  }
   if (filters.neighborhood) {
     results = results.filter(
-      (e) => e.devices?.neighborhood === filters.neighborhood
+      (e) => (e.devices as unknown as Device)?.neighborhood === filters.neighborhood
     );
   }
   return results;
@@ -117,68 +103,29 @@ export async function getOverviewStats() {
 }
 
 export async function getFloodEventCountByMonth(): Promise<{ month: string; count: number }[]> {
-  const sixMonthsAgo = new Date(Date.now() - 180 * 86400 * 1000).toISOString();
-  const { data, error } = await getSupabase()
-    .from('flood_events')
-    .select('started_at')
-    .gte('started_at', sixMonthsAgo);
-  if (error) throw new Error(error.message);
-
-  const counts: Record<string, number> = {};
-  for (const e of data ?? []) {
-    const week = e.started_at.slice(0, 10);
-    counts[week] = (counts[week] || 0) + 1;
-  }
-  return Object.entries(counts)
-    .map(([month, count]) => ({ month, count }))
-    .sort((a, b) => a.month.localeCompare(b.month));
+  const res = await fetch('/api/data?table=flood_events_monthly');
+  if (!res.ok) throw new Error('Failed to fetch flood event counts');
+  return res.json();
 }
 
 export async function getTopFloodingDevices(limit = 10): Promise<{ device_id: string; name: string | null; count: number }[]> {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
-  const { data, error } = await getSupabase()
-    .from('flood_events')
-    .select('device_id, devices(name)')
-    .gte('started_at', thirtyDaysAgo);
-  if (error) throw new Error(error.message);
-
-  const counts: Record<string, { name: string | null; count: number }> = {};
-  for (const e of data ?? []) {
-    const dev = e.device_id;
-    if (!counts[dev]) counts[dev] = { name: (e.devices as unknown as Device)?.name ?? null, count: 0 };
-    counts[dev].count++;
-  }
-
-  return Object.entries(counts)
-    .map(([device_id, v]) => ({ device_id, ...v }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, limit);
+  const res = await fetch(`/api/data?table=top_flooding&limit=${limit}`);
+  if (!res.ok) throw new Error('Failed to fetch top flooding devices');
+  return res.json();
 }
 
-// ── Recommendations ─────────────────────────────────────────
+// ── Recommendations (use server API to bypass RLS) ──────────
 export async function getRecommendations(): Promise<Recommendation[]> {
-  const { data, error } = await getSupabase()
-    .from('infrastructure_recommendations')
-    .select('*')
-    .order('generated_at', { ascending: false });
-  if (error) throw new Error(error.message);
-  return data ?? [];
+  const res = await fetch('/api/data?table=recommendations');
+  if (!res.ok) throw new Error('Failed to fetch recommendations');
+  return res.json();
 }
 
 // ── Flood event counts per device (30 days) ─────────────────
 export async function getFloodEventCount30d(): Promise<Record<string, number>> {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
-  const { data, error } = await getSupabase()
-    .from('flood_events')
-    .select('device_id')
-    .gte('started_at', thirtyDaysAgo);
-  if (error) throw new Error(error.message);
-
-  const counts: Record<string, number> = {};
-  for (const e of data ?? []) {
-    counts[e.device_id] = (counts[e.device_id] || 0) + 1;
-  }
-  return counts;
+  const res = await fetch('/api/data?table=flood_counts');
+  if (!res.ok) throw new Error('Failed to fetch flood counts');
+  return res.json();
 }
 
 // ── Neighborhoods ───────────────────────────────────────────
