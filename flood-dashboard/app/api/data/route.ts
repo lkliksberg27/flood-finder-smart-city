@@ -133,9 +133,8 @@ export async function GET(request: Request) {
         const testEvent = {
           device_id: "FF-001",
           started_at: new Date().toISOString(),
-          ended_at: new Date().toISOString(),
+          ended_at: new Date(Date.now() + 300000).toISOString(),
           peak_depth_cm: 10,
-          duration_minutes: 5,
           rainfall_mm: null,
           tide_level_m: null,
         };
