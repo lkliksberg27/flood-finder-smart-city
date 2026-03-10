@@ -8,7 +8,7 @@ import {
   ScatterChart, Scatter, LineChart, Line,
   ResponsiveContainer, Cell, Legend,
 } from "recharts";
-import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp, Search } from "lucide-react";
+import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp, Search, Mountain } from "lucide-react";
 import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import { haversineKm, streetElevation, findRoadDips, type DipInfo } from "@/lib/geo";
 import type { Device, FloodEvent } from "@/lib/types";
@@ -211,6 +211,73 @@ function AnalyticsContent() {
             </p>
           </div>
         </div>
+
+        {/* City-wide Elevation & Road Dip Overview */}
+        {(() => {
+          const dips = findRoadDips(allDevices, floodCounts);
+          const withElev = allDevices.filter((d) => d.altitude_baro != null);
+          if (withElev.length === 0) return null;
+          const elevs = withElev.map((d) => streetElevation(d));
+          const minElev = Math.min(...elevs);
+          const maxElev = Math.max(...elevs);
+          const avgElev = (elevs.reduce((s, e) => s + e, 0) / elevs.length).toFixed(2);
+          const belowOne = withElev.filter((d) => streetElevation(d) < 1.0).length;
+
+          return (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <Mountain size={14} className="text-status-amber" />
+                City-Wide Elevation & Road Dips
+              </h3>
+              <div className="grid grid-cols-5 gap-3 mb-3">
+                <div className="bg-bg-card border border-border-card rounded-lg p-3">
+                  <p className="text-xs text-text-secondary">Lowest</p>
+                  <p className={`text-lg font-bold ${minElev < 1.0 ? "text-status-red" : "text-status-amber"}`}>
+                    {minElev.toFixed(2)}m
+                  </p>
+                </div>
+                <div className="bg-bg-card border border-border-card rounded-lg p-3">
+                  <p className="text-xs text-text-secondary">Average</p>
+                  <p className="text-lg font-bold">{avgElev}m</p>
+                </div>
+                <div className="bg-bg-card border border-border-card rounded-lg p-3">
+                  <p className="text-xs text-text-secondary">Highest</p>
+                  <p className="text-lg font-bold text-status-green">{maxElev.toFixed(2)}m</p>
+                </div>
+                <div className="bg-bg-card border border-border-card rounded-lg p-3">
+                  <p className="text-xs text-text-secondary">Road Dips</p>
+                  <p className={`text-lg font-bold ${dips.length > 0 ? "text-status-red" : "text-status-green"}`}>
+                    {dips.length} detected
+                  </p>
+                </div>
+                <div className="bg-bg-card border border-border-card rounded-lg p-3">
+                  <p className="text-xs text-text-secondary">Low Risk (&lt;1m)</p>
+                  <p className={`text-lg font-bold ${belowOne > 0 ? "text-status-amber" : "text-status-green"}`}>
+                    {belowOne} sensors
+                  </p>
+                </div>
+              </div>
+              {dips.length > 0 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {dips.slice(0, 6).map((d) => (
+                    <div key={d.device_id} className="bg-bg-card border border-border-card rounded p-2.5 text-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="font-mono text-text-secondary">{d.device_id}</span>
+                        <span className="font-bold text-status-red">-{d.dipCm}cm</span>
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-text-secondary">{d.neighborhood ?? ""}</span>
+                        <span className={d.floodCount > 0 ? "text-status-red" : "text-status-green"}>
+                          {d.floodCount} floods
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* City-wide flood map */}
         <div className="h-[380px] rounded-lg overflow-hidden border border-border-card mb-6">

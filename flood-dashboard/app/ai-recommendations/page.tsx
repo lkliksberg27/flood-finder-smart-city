@@ -7,6 +7,8 @@ import {
   Filter, RefreshCw, Search, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { getRecommendations, getAllDevices } from "@/lib/queries";
+import { useAuth } from "@/components/AuthGate";
+import { getSupabase } from "@/lib/supabase";
 import type { Recommendation, Device } from "@/lib/types";
 
 const DeviceMap = dynamic(
@@ -72,6 +74,7 @@ interface CacheStatus {
 }
 
 export default function AIRecommendationsPage() {
+  const { user } = useAuth();
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
@@ -121,13 +124,25 @@ export default function AIRecommendationsPage() {
     setLoading(true);
     setAnalysisMessage(null);
     try {
+      // Get fresh session token for auth
+      const { data: { session } } = await getSupabase().auth.getSession();
+      if (!session) {
+        setAnalysisMessage("Sign in required to run AI analysis");
+        return;
+      }
+
       const params = new URLSearchParams();
       if (selectedNeighborhood) params.set("neighborhood", selectedNeighborhood);
       if (force) params.set("force", "true");
 
       const url = `/api/run-analysis${params.toString() ? `?${params}` : ""}`;
-      const res = await fetch(url, { method: "POST" });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${session.access_token}` },
+      });
       const data = await res.json();
+      if (res.status === 401) throw new Error("Sign in required to run analysis");
+      if (res.status === 429) throw new Error(data.error || "Rate limit — try again later");
       if (!res.ok) throw new Error(data.error || "Analysis failed");
 
       if (data.cached) {
@@ -228,28 +243,36 @@ export default function AIRecommendationsPage() {
               ))}
             </select>
           </div>
-          <button
-            onClick={() => runAnalysis(false)}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-status-blue/20 text-status-blue rounded-lg hover:bg-status-blue/30 transition-colors text-sm disabled:opacity-50"
-          >
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <BrainCircuit size={16} />}
-            {loading
-              ? `Analyzing ${selectedNeighborhood || "all"} sensor data...`
-              : selectedNeighborhood
-                ? `Analyze ${selectedNeighborhood}`
-                : "Run Full Analysis"}
-          </button>
-          {cacheStatus?.isCached && (
-            <button
-              onClick={() => runAnalysis(true)}
-              disabled={loading}
-              title="Bypass the 7-day cache and run a fresh analysis"
-              className="flex items-center gap-2 px-3 py-2 bg-status-amber/15 text-status-amber rounded-lg hover:bg-status-amber/25 transition-colors text-sm disabled:opacity-50"
-            >
-              <RefreshCw size={14} />
-              Force New Analysis
-            </button>
+          {user ? (
+            <>
+              <button
+                onClick={() => runAnalysis(false)}
+                disabled={loading}
+                className="flex items-center gap-2 px-4 py-2 bg-status-blue/20 text-status-blue rounded-lg hover:bg-status-blue/30 transition-colors text-sm disabled:opacity-50"
+              >
+                {loading ? <Loader2 size={16} className="animate-spin" /> : <BrainCircuit size={16} />}
+                {loading
+                  ? `Analyzing ${selectedNeighborhood || "all"} sensor data...`
+                  : selectedNeighborhood
+                    ? `Analyze ${selectedNeighborhood}`
+                    : "Run Full Analysis"}
+              </button>
+              {cacheStatus?.isCached && (
+                <button
+                  onClick={() => runAnalysis(true)}
+                  disabled={loading}
+                  title="Bypass the 14-day cache (available after 7 days)"
+                  className="flex items-center gap-2 px-3 py-2 bg-status-amber/15 text-status-amber rounded-lg hover:bg-status-amber/25 transition-colors text-sm disabled:opacity-50"
+                >
+                  <RefreshCw size={14} />
+                  Force Refresh
+                </button>
+              )}
+            </>
+          ) : (
+            <span className="text-xs text-text-secondary px-3 py-2 bg-bg-primary rounded-lg border border-border-card">
+              Sign in to run AI analysis
+            </span>
           )}
         </div>
       </div>
@@ -282,9 +305,11 @@ export default function AIRecommendationsPage() {
 
       {analysisMessage && (
         <div className={`mb-4 p-3 rounded-lg text-sm whitespace-pre-wrap ${
-          analysisMessage.includes("cached") || analysisMessage.includes("Using cached")
-            ? "bg-status-blue/10 border border-status-blue/20 text-status-blue"
-            : "bg-status-green/10 border border-status-green/20 text-status-green"
+          analysisMessage.includes("Sign in") || analysisMessage.includes("Rate limit") || analysisMessage.includes("failed") || analysisMessage.includes("error")
+            ? "bg-status-red/10 border border-status-red/20 text-status-red"
+            : analysisMessage.includes("cached") || analysisMessage.includes("Using cached")
+              ? "bg-status-blue/10 border border-status-blue/20 text-status-blue"
+              : "bg-status-green/10 border border-status-green/20 text-status-green"
         }`}>
           {analysisMessage}
         </div>

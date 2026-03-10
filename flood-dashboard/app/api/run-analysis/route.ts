@@ -93,38 +93,63 @@ function analyzeGradients(devices: DeviceRow[]) {
 
 export async function POST(request: Request) {
   try {
+    // ── Auth: require valid Supabase session ──────────────────
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return NextResponse.json(
+        { error: "Authentication required to run analysis" },
+        { status: 401 }
+      );
+    }
+
+    const supabase = createServiceClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser(
+      authHeader.slice(7)
+    );
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: "Invalid or expired session — please sign in" },
+        { status: 401 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const neighborhoodFilter = searchParams.get("neighborhood") || "";
     const forceRefresh = searchParams.get("force") === "true";
 
-    const supabase = createServiceClient();
+    // ── Rate limiting: check cache (14-day default, 7-day min with force) ──
+    let cacheQuery = supabase
+      .from("infrastructure_recommendations")
+      .select("generated_at")
+      .order("generated_at", { ascending: false })
+      .limit(1);
 
-    // Check for cached analysis (within 7 days) unless force refresh
-    if (!forceRefresh) {
-      let cacheQuery = supabase
-        .from("infrastructure_recommendations")
-        .select("generated_at")
-        .order("generated_at", { ascending: false })
-        .limit(1);
+    if (neighborhoodFilter) {
+      cacheQuery = cacheQuery.ilike("recommendation_text", `%[${neighborhoodFilter}]%`);
+    }
 
-      if (neighborhoodFilter) {
-        cacheQuery = cacheQuery.ilike("recommendation_text", `%[${neighborhoodFilter}]%`);
+    const { data: cacheData } = await cacheQuery;
+    if (cacheData?.[0]) {
+      const daysAgo = Math.floor(
+        (Date.now() - new Date(cacheData[0].generated_at).getTime()) / 86400000
+      );
+
+      // Force refresh blocked if analysis is less than 7 days old
+      if (forceRefresh && daysAgo < 7) {
+        return NextResponse.json({
+          error: `Analysis was run ${daysAgo === 0 ? "today" : `${daysAgo} day${daysAgo > 1 ? "s" : ""} ago`}. Force refresh available after 7 days to conserve API credits.`,
+        }, { status: 429 });
       }
 
-      const { data: cacheData } = await cacheQuery;
-      if (cacheData?.[0]) {
-        const daysAgo = Math.floor(
-          (Date.now() - new Date(cacheData[0].generated_at).getTime()) / 86400000
-        );
-        if (daysAgo < 7) {
-          const daysUntil = 7 - daysAgo;
-          return NextResponse.json({
-            message: `Using cached analysis from ${daysAgo === 0 ? "today" : `${daysAgo} day${daysAgo > 1 ? "s" : ""} ago`}`,
-            cached: true,
-            daysAgo,
-            daysUntilRefresh: daysUntil,
-          });
-        }
+      // Normal request uses 14-day cache
+      if (!forceRefresh && daysAgo < 14) {
+        const daysUntil = 14 - daysAgo;
+        return NextResponse.json({
+          message: `Using cached analysis from ${daysAgo === 0 ? "today" : `${daysAgo} day${daysAgo > 1 ? "s" : ""} ago`}`,
+          cached: true,
+          daysAgo,
+          daysUntilRefresh: daysUntil,
+        });
       }
     }
 
@@ -301,8 +326,8 @@ export async function POST(request: Request) {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4000,
+      model: neighborhoodFilter ? "claude-haiku-4-5-20251001" : "claude-sonnet-4-6",
+      max_tokens: neighborhoodFilter ? 1500 : 2048,
       messages: [{
         role: "user",
         content: `You are a senior urban flood infrastructure engineer consulting for the City of Aventura, Florida (Miami-Dade County).
@@ -383,7 +408,7 @@ SECTION 5: RAINFALL THRESHOLD ANALYSIS
 Minimum rainfall that triggers flooding: ~${rainfallThreshold ?? "insufficient data"}mm
 Rainfall-flood data pairs:
 ═══════════════════════════════════════════════════
-${JSON.stringify(rainfallFloodPairs.slice(0, 20), null, 2)}
+${JSON.stringify(rainfallFloodPairs.slice(0, 12), null, 2)}
 
 ═══════════════════════════════════════════════════
 SECTION 6: COMPOUND EVENT ANALYSIS
@@ -431,7 +456,7 @@ Return a JSON object (no markdown fences, raw JSON only):
   ]
 }
 
-Generate 6-8 recommendations ordered by priority. Each must cite at least one engineering standard or data source from the reference section above.`,
+Generate 4-6 recommendations ordered by priority. Each must cite at least one engineering standard or data source from the reference section above. Be concise — focus on actionable specifics.`,
       }],
     });
 
