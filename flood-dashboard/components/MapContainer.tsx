@@ -148,61 +148,112 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Flood water visualization — blue heatmap showing flooded areas
+      // ── Flood water visualization (multi-layer for realistic look) ──
+
+      // Source for active floods
       map.addSource("flood-water", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
-      map.addLayer({
-        id: "flood-water-heatmap",
-        type: "heatmap",
-        source: "flood-water",
-        paint: {
-          "heatmap-weight": ["get", "weight"],
-          "heatmap-intensity": 0.6,
-          "heatmap-radius": [
-            "interpolate", ["linear"], ["get", "depth"],
-            5, 35,
-            20, 65,
-            50, 100,
-          ],
-          "heatmap-color": [
-            "interpolate", ["linear"], ["heatmap-density"],
-            0, "rgba(0,0,0,0)",
-            0.1, "rgba(30,100,200,0.1)",
-            0.3, "rgba(30,130,230,0.25)",
-            0.5, "rgba(20,100,210,0.35)",
-            0.7, "rgba(10,70,180,0.45)",
-            1, "rgba(5,50,150,0.55)",
-          ],
-          "heatmap-opacity": 0.85,
-        },
-      });
 
-      // Flood-prone zones — blue circles showing historical flood areas
+      // Source for historical flood-prone zones
       map.addSource("flood-zones", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
+
+      // Layer 1: Historical flood zones — wide soft blue glow (outer water spread)
       map.addLayer({
-        id: "flood-zones-fill",
+        id: "flood-zones-outer",
         type: "circle",
         source: "flood-zones",
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 20,
-            0.5, 35,
-            1, 55,
+            0.1, 30,
+            0.5, 55,
+            1, 80,
+          ],
+          "circle-color": "#1d4ed8",
+          "circle-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.06,
+            0.5, 0.12,
+            1, 0.18,
+          ],
+          "circle-blur": 1,
+        },
+      });
+
+      // Layer 2: Historical flood zones — tighter water body
+      map.addLayer({
+        id: "flood-zones-inner",
+        type: "circle",
+        source: "flood-zones",
+        paint: {
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 14,
+            0.5, 25,
+            1, 40,
+          ],
+          "circle-color": "#2563eb",
+          "circle-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.1,
+            0.5, 0.2,
+            1, 0.3,
+          ],
+          "circle-blur": 0.4,
+        },
+      });
+
+      // Layer 3: Active flood — bright blue water spread
+      map.addLayer({
+        id: "flood-water-spread",
+        type: "circle",
+        source: "flood-water",
+        paint: {
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "depth"],
+            5, 40,
+            20, 70,
+            50, 110,
+          ],
+          "circle-color": "#1e40af",
+          "circle-opacity": [
+            "interpolate", ["linear"], ["get", "depth"],
+            5, 0.15,
+            20, 0.25,
+            50, 0.35,
+          ],
+          "circle-blur": 0.8,
+        },
+      });
+
+      // Layer 4: Active flood — solid water center
+      map.addLayer({
+        id: "flood-water-core",
+        type: "circle",
+        source: "flood-water",
+        paint: {
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "depth"],
+            5, 18,
+            20, 35,
+            50, 55,
           ],
           "circle-color": "#3b82f6",
           "circle-opacity": [
-            "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.08,
-            0.5, 0.15,
-            1, 0.25,
+            "interpolate", ["linear"], ["get", "depth"],
+            5, 0.3,
+            20, 0.45,
+            50, 0.55,
           ],
-          "circle-blur": 0.6,
+          "circle-blur": 0.3,
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "#60a5fa",
+          "circle-stroke-opacity": 0.4,
         },
       });
 
