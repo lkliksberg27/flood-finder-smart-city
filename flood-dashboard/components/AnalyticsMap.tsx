@@ -7,6 +7,63 @@ import type { Device, FloodEvent } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
+/** Query road features near flood-affected devices for street-level water effect */
+function queryFloodRoadsAnalytics(
+  map: mapboxgl.Map,
+  devices: Device[],
+  stats: Record<string, { count: number; maxDepth: number }>,
+  maxCount: number,
+): GeoJSON.Feature[] {
+  const style = map.getStyle();
+  if (!style?.layers) return [];
+
+  const roadLayerIds = style.layers
+    .filter((l) => {
+      const sl = (l as Record<string, unknown>)["source-layer"];
+      return l.type === "line" && sl === "road";
+    })
+    .map((l) => l.id);
+
+  if (roadLayerIds.length === 0) return [];
+
+  const features: GeoJSON.Feature[] = [];
+  const seen = new Set<string>();
+
+  devices.forEach((d) => {
+    const s = stats[d.device_id];
+    if (!s || s.count <= 0) return;
+
+    const point = map.project([d.lng, d.lat]);
+    const radius = Math.min(180, 60 + s.count * 12 + (s.maxDepth / 3));
+
+    const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
+      [point.x - radius, point.y - radius],
+      [point.x + radius, point.y + radius],
+    ];
+
+    try {
+      const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+      for (const f of roadFeatures) {
+        if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+        const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        features.push({
+          type: "Feature",
+          geometry: f.geometry,
+          properties: {
+            intensity: Math.min(1, s.count / Math.max(maxCount, 1)),
+          },
+        });
+      }
+    } catch {
+      // can fail during transitions
+    }
+  });
+
+  return features;
+}
+
 interface Props {
   devices: Device[];
   events: FloodEvent[];
@@ -19,6 +76,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sourcesReady = useRef(false);
+  const devicesRef = useRef(devices);
+  const statsRef = useRef<Record<string, { count: number; maxDepth: number }>>({});
+  const maxCountRef = useRef(1);
+  devicesRef.current = devices;
 
   // Initialize map
   useEffect(() => {
@@ -51,7 +112,13 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Water visualization — large translucent blue circles
+      // Road segments near floods — "water on streets" effect
+      map.addSource("flood-roads", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+
+      // Water visualization — area glow circles
       map.addLayer({
         id: "flood-water-glow",
         type: "circle",
@@ -62,10 +129,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
             "interpolate",
             ["linear"],
             ["get", "severity"],
-            0, "rgba(59, 130, 246, 0.08)",
-            0.3, "rgba(59, 130, 246, 0.15)",
-            0.6, "rgba(248, 113, 113, 0.2)",
-            1, "rgba(248, 113, 113, 0.3)",
+            0, "rgba(59, 130, 246, 0.12)",
+            0.3, "rgba(59, 130, 246, 0.2)",
+            0.6, "rgba(248, 113, 113, 0.25)",
+            1, "rgba(248, 113, 113, 0.35)",
           ],
           "circle-blur": 0.6,
         },
@@ -82,12 +149,70 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
             "interpolate",
             ["linear"],
             ["get", "severity"],
-            0, "rgba(59, 130, 246, 0.12)",
-            0.5, "rgba(96, 165, 250, 0.2)",
-            1, "rgba(248, 113, 113, 0.35)",
+            0, "rgba(59, 130, 246, 0.15)",
+            0.5, "rgba(96, 165, 250, 0.25)",
+            1, "rgba(248, 113, 113, 0.4)",
           ],
           "circle-blur": 0.3,
         },
+      });
+
+      // Road water — outer blue glow on streets
+      map.addLayer({
+        id: "flood-road-water",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": "#1565c0",
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 6, 14, 14, 16, 28, 18, 50,
+          ],
+          "line-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.2, 0.5, 0.35, 1, 0.5,
+          ],
+          "line-blur": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 3, 14, 5, 16, 8, 18, 12,
+          ],
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      // Road water — brighter center
+      map.addLayer({
+        id: "flood-road-water-bright",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": "#42a5f5",
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 3, 14, 7, 16, 15, 18, 28,
+          ],
+          "line-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.15, 0.5, 0.3, 1, 0.45,
+          ],
+          "line-blur": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 1, 14, 2, 16, 4, 18, 6,
+          ],
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      // Update flood roads on zoom/pan
+      const updateRoads = () => {
+        if (!map.isStyleLoaded()) return;
+        const roads = queryFloodRoadsAnalytics(map, devicesRef.current, statsRef.current, maxCountRef.current);
+        const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+        if (src) src.setData({ type: "FeatureCollection", features: roads });
+      };
+      map.on("moveend", updateRoads);
+      map.on("sourcedata", (e) => {
+        if (e.sourceId === "composite" && e.isSourceLoaded) updateRoads();
       });
 
       // Sensor dots layer
@@ -234,6 +359,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     const maxFloodCount = Math.max(1, ...Object.values(deviceStats).map((s) => s.count));
 
+    // Update refs for road query function
+    statsRef.current = deviceStats;
+    maxCountRef.current = maxFloodCount;
+
     // Water features (flood depth visualization)
     const waterFeatures: GeoJSON.Feature[] = [];
     // Dot features
@@ -302,6 +431,14 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     waterSrc.setData({ type: "FeatureCollection", features: waterFeatures });
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
+    // Update road-following flood water
+    setTimeout(() => {
+      if (!map.isStyleLoaded()) return;
+      const roads = queryFloodRoadsAnalytics(map, devices, deviceStats, maxFloodCount);
+      const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+    }, 300);
+
     // Fit bounds
     if (devices.length > 1) {
       const bounds = new mapboxgl.LngLatBounds();
@@ -349,8 +486,8 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
           <span>6+ events</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 6, borderTop: "1px solid #1f2937" }}>
-          <span style={{ width: 18, height: 18, borderRadius: "50%", background: "rgba(59,130,246,0.2)", display: "inline-block" }} />
-          <span>Water accumulation zone</span>
+          <span style={{ width: 14, height: 4, borderRadius: 2, background: "rgba(66,165,245,0.6)", display: "inline-block" }} />
+          <span>Flooded streets</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
           <span style={{ width: 10, height: 10, borderRadius: "50%", border: "2px solid #ff0000", display: "inline-block" }} />
