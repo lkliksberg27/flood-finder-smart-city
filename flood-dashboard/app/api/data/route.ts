@@ -137,8 +137,8 @@ export async function GET(request: Request) {
         const daysAgo = lastAnalysis
           ? Math.floor((Date.now() - new Date(lastAnalysis).getTime()) / 86400000)
           : null;
-        const daysUntilRefresh = daysAgo !== null ? Math.max(0, 7 - daysAgo) : null;
-        const isCached = daysAgo !== null && daysAgo < 7;
+        const daysUntilRefresh = daysAgo !== null ? Math.max(0, 14 - daysAgo) : null;
+        const isCached = daysAgo !== null && daysAgo < 14;
 
         return NextResponse.json({
           lastAnalysis,
@@ -165,46 +165,6 @@ export async function GET(request: Request) {
           .limit(limit);
         if (error) throw error;
         return NextResponse.json(data ?? []);
-      }
-
-      case "debug": {
-        // Test insert + read on flood_events to diagnose issues
-        const testEvent = {
-          device_id: "FF-001",
-          started_at: new Date().toISOString(),
-          ended_at: new Date(Date.now() + 300000).toISOString(),
-          peak_depth_cm: 10,
-          rainfall_mm: null,
-          tide_level_m: null,
-        };
-        const insertResult = await supabase
-          .from("flood_events")
-          .insert(testEvent)
-          .select();
-        const readResult = await supabase
-          .from("flood_events")
-          .select("*")
-          .limit(5);
-        const countResult = await supabase
-          .from("flood_events")
-          .select("*", { count: "exact", head: true });
-        return NextResponse.json({
-          insert: {
-            data: insertResult.data,
-            error: insertResult.error?.message ?? null,
-            code: insertResult.error?.code ?? null,
-            details: insertResult.error?.details ?? null,
-            hint: insertResult.error?.hint ?? null,
-          },
-          read: {
-            count: readResult.data?.length ?? 0,
-            error: readResult.error?.message ?? null,
-          },
-          totalCount: {
-            count: countResult.count,
-            error: countResult.error?.message ?? null,
-          },
-        });
       }
 
       default:
