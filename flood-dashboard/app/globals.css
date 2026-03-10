@@ -68,6 +68,12 @@ body {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.4); opacity: 0.6; }
 }
+
+/* Search location pulse */
+@keyframes searchPulse {
+  0% { transform: scale(0.5); opacity: 1; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
 .marker-alert {
   animation: pulse-alert 1.5s ease-in-out infinite;
 }

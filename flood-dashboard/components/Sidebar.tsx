@@ -13,7 +13,10 @@ import {
   X,
   MapPin,
   Zap,
+  LogOut,
+  Globe,
 } from "lucide-react";
+import { useAuth } from "@/components/AuthGate";
 import { getSupabase } from "@/lib/supabase";
 
 const navItems = [
@@ -34,6 +37,7 @@ interface QuickResult {
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const { user, signOut } = useAuth();
   const [sensorCount, setSensorCount] = useState<number | null>(null);
   const [activeAlerts, setActiveAlerts] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -159,6 +163,16 @@ export function Sidebar() {
       }
     });
 
+    // Always add "Search on map" option for address lookups
+    if (q.length >= 3) {
+      results.push({
+        type: "neighborhood",
+        label: `Search "${searchQuery.trim()}" on map`,
+        sublabel: "Find nearby sensors for any location",
+        href: `/?location=${encodeURIComponent(searchQuery.trim())}`,
+      });
+    }
+
     setSearchResults(results.slice(0, 8));
   }, [searchQuery, neighborhoods, deviceNames]);
 
@@ -234,6 +248,20 @@ export function Sidebar() {
             </p>
           )}
           <p className="text-xs text-text-secondary mt-1">Aventura, FL</p>
+          {user && (
+            <div className="flex items-center justify-between mt-2 pt-2 border-t border-border-card">
+              <p className="text-[11px] text-text-secondary truncate max-w-[130px]">
+                {user.email}
+              </p>
+              <button
+                onClick={signOut}
+                className="flex items-center gap-1 text-[11px] text-text-secondary hover:text-status-red transition-colors"
+              >
+                <LogOut size={11} />
+                Sign out
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -273,7 +301,8 @@ export function Sidebar() {
                     onClick={() => handleResultClick(result)}
                     className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-bg-card-hover transition-colors text-left"
                   >
-                    {result.type === "neighborhood" && <MapPin size={14} className="text-status-blue shrink-0" />}
+                    {result.type === "neighborhood" && !result.href.startsWith("/?location=") && <MapPin size={14} className="text-status-blue shrink-0" />}
+                    {result.href.startsWith("/?location=") && <Globe size={14} className="text-status-blue shrink-0" />}
                     {result.type === "device" && <Radio size={14} className="text-status-green shrink-0" />}
                     {result.type === "page" && <Zap size={14} className="text-status-amber shrink-0" />}
                     <div className="flex-1 min-w-0">
