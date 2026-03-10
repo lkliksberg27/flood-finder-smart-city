@@ -215,7 +215,7 @@ export default function FloodEventsPage() {
       {/* Events table */}
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs text-text-secondary">{filtered.length} event{filtered.length !== 1 ? "s" : ""} shown</p>
-        {filtered.length > PAGE_SIZE && (
+        {filtered.length > PAGE_SIZE && filtered.length > 0 && (
           <div className="flex items-center gap-2">
             <button
               onClick={() => setPage(Math.max(0, page - 1))}
