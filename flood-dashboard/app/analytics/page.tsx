@@ -67,19 +67,20 @@ function findRoadDips(devices: Device[], floodCounts: Record<string, number>): D
   if (withElev.length < 3) return [];
 
   return withElev.map((d) => {
+    const elev = streetElevation(d);
     const neighbors = withElev
       .filter((n) => n.device_id !== d.device_id)
-      .map((n) => ({ ...n, dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
+      .map((n) => ({ ...n, elev: streetElevation(n), dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
       .sort((a, b) => a.dist - b.dist)
       .slice(0, 3);
 
-    const avgNeighborElev = neighbors.reduce((s, n) => s + (n.altitude_baro ?? 0), 0) / neighbors.length;
-    const diff = (d.altitude_baro ?? 0) - avgNeighborElev;
+    const avgNeighborElev = neighbors.reduce((s, n) => s + n.elev, 0) / neighbors.length;
+    const diff = elev - avgNeighborElev;
 
     return {
       device_id: d.device_id,
       name: d.name,
-      elevation_m: d.altitude_baro ?? 0,
+      elevation_m: elev,
       avgNeighborElev: parseFloat(avgNeighborElev.toFixed(2)),
       dipCm: Math.round(-diff * 100),
       floodCount: floodCounts[d.device_id] ?? 0,
@@ -87,6 +88,11 @@ function findRoadDips(devices: Device[], floodCounts: Record<string, number>): D
   })
     .filter((d) => d.dipCm > 10)
     .sort((a, b) => b.dipCm - a.dipCm);
+}
+
+function streetElevation(d: Device): number {
+  if (d.altitude_baro == null) return 0;
+  return d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100;
 }
 
 function computeRisk(events: number, avgDepth: number, compoundEvents: number): "critical" | "high" | "moderate" | "low" {
@@ -165,7 +171,7 @@ function AnalyticsContent() {
         const compoundEvents = events.filter(
           (e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3
         ).length;
-        const elevations = sensors.filter((d) => d.altitude_baro != null).map((d) => d.altitude_baro!);
+        const elevations = sensors.filter((d) => d.altitude_baro != null).map((d) => streetElevation(d));
         const avgElevation = elevations.length > 0
           ? parseFloat((elevations.reduce((s, e) => s + e, 0) / elevations.length).toFixed(2))
           : 0;
@@ -401,7 +407,7 @@ function AnalyticsContent() {
     .filter((d) => d.altitude_baro != null)
     .map((d) => ({
       device: d.device_id,
-      elevation: parseFloat((d.altitude_baro ?? 0).toFixed(2)),
+      elevation: parseFloat(streetElevation(d).toFixed(2)),
       floods: floodCounts[d.device_id] ?? 0,
     }))
     .sort((a, b) => a.elevation - b.elevation);
@@ -549,7 +555,7 @@ function AnalyticsContent() {
               }
 
               // Elevation
-              const lowElev = devices.filter((d) => (d.altitude_baro ?? 99) < 1.0);
+              const lowElev = devices.filter((d) => d.altitude_baro != null && streetElevation(d) < 1.0);
               if (lowElev.length > 0) {
                 lines.push(`${lowElev.length} sensor${lowElev.length > 1 ? "s" : ""} in this area sit below 1.0m elevation — these low-lying points are natural water collection zones and are the highest priority for drainage upgrades.`);
               }
@@ -576,7 +582,7 @@ function AnalyticsContent() {
         const withElev = devices.filter((d) => d.altitude_baro != null);
         if (withElev.length === 0) return null;
 
-        const elevs = withElev.map((d) => d.altitude_baro!);
+        const elevs = withElev.map((d) => streetElevation(d));
         const minElev = Math.min(...elevs);
         const maxElev = Math.max(...elevs);
         const avgElev = (elevs.reduce((s, e) => s + e, 0) / elevs.length).toFixed(2);
@@ -607,23 +613,26 @@ function AnalyticsContent() {
               {/* Sensor elevation list */}
               <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
                 {withElev
-                  .sort((a, b) => (a.altitude_baro ?? 0) - (b.altitude_baro ?? 0))
-                  .map((d) => (
+                  .sort((a, b) => streetElevation(a) - streetElevation(b))
+                  .map((d) => {
+                    const elev = streetElevation(d);
+                    return (
                     <div key={d.device_id} className="flex items-center justify-between text-xs">
                       <span className="text-text-secondary truncate max-w-[120px]">{d.name ?? d.device_id}</span>
                       <div className="flex items-center gap-2">
                         <span className={`font-medium ${
-                          (d.altitude_baro ?? 0) < 1.0 ? "text-status-red" :
-                          (d.altitude_baro ?? 0) < 1.5 ? "text-status-amber" : ""
+                          elev < 1.0 ? "text-status-red" :
+                          elev < 1.5 ? "text-status-amber" : ""
                         }`}>
-                          {d.altitude_baro?.toFixed(2)}m
+                          {elev.toFixed(2)}m
                         </span>
                         {(floodCounts[d.device_id] ?? 0) > 0 && (
                           <span className="text-status-red">{floodCounts[d.device_id]} floods</span>
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
               </div>
             </div>
 

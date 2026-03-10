@@ -127,7 +127,7 @@ function SensorsContent() {
     ["status", "Status"],
     ["battery_v", "Battery"],
     ["last_seen", "Last Seen"],
-    ["altitude_baro", "Elevation"],
+    ["altitude_baro", "Street Elev."],
     ["flood_events_30d", "Floods (30d)"],
   ];
 
@@ -285,7 +285,11 @@ function SensorsContent() {
                       return `${Math.round(ms / 86400000)}d ago`;
                     })() : "Never"}
                   </td>
-                  <td className="px-4 py-3">{d.altitude_baro?.toFixed(1) ?? "—"}m</td>
+                  <td className="px-4 py-3">
+                    {d.altitude_baro != null
+                      ? `${(d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100).toFixed(1)}m`
+                      : "—"}
+                  </td>
                   <td className="px-4 py-3">
                     <span className={
                       (floodCounts[d.device_id] ?? 0) > 5 ? "text-status-red font-medium" :
@@ -360,8 +364,12 @@ function SensorsContent() {
                         )}
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <div className="bg-bg-card rounded p-2">
-                            <p className="text-text-secondary">Elevation</p>
-                            <p className="font-medium">{d.altitude_baro?.toFixed(2) ?? "—"}m</p>
+                            <p className="text-text-secondary">Street Elev.</p>
+                            <p className="font-medium">
+                              {d.altitude_baro != null
+                                ? `${(d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100).toFixed(2)}m`
+                                : "—"}
+                            </p>
                           </div>
                           <div className="bg-bg-card rounded p-2">
                             <p className="text-text-secondary">Floods/30d</p>
