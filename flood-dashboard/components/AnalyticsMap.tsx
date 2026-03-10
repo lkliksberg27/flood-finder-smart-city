@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device, FloodEvent } from "@/lib/types";
@@ -104,9 +104,9 @@ interface Props {
 }
 
 export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAreaClick }: Props) {
+  const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const sourcesReady = useRef(false);
   const devicesRef = useRef(devices);
   const statsRef = useRef<Record<string, { count: number; totalDepth: number; maxDepth: number }>>({});
   devicesRef.current = devices;
@@ -216,7 +216,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         },
       });
 
-      sourcesReady.current = true;
+      setMapReady(true);
 
       // Update flood roads on zoom/pan
       const updateWater = () => {
@@ -287,14 +287,14 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     return () => {
       mapRef.current?.remove();
       mapRef.current = null;
-      sourcesReady.current = false;
+      setMapReady(false);
     };
   }, []);
 
   // Update data
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !sourcesReady.current) return;
+    if (!map || !mapReady) return;
 
     const dotSrc = map.getSource("analytics-dots") as mapboxgl.GeoJSONSource | undefined;
     if (!dotSrc) return;
@@ -371,7 +371,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     } else if (devices.length === 1) {
       map.flyTo({ center: [devices[0].lng, devices[0].lat], zoom: 16, duration: 500 });
     }
-  }, [devices, events, floodCounts]);
+  }, [devices, events, floodCounts, mapReady]);
 
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>

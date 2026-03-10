@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
@@ -174,6 +174,7 @@ interface Props {
 }
 
 export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation, floodDepths, floodCounts }: Props) {
+  const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -468,18 +469,22 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       map.on("mouseleave", "device-dots-layer", () => {
         map.getCanvas().style.cursor = "";
       });
+
+      // Signal that map is ready for data
+      setMapReady(true);
     });
 
     return () => {
       mapRef.current?.remove();
       mapRef.current = null;
+      setMapReady(false);
     };
   }, [loadPopupData]);
 
-  // Update sources when devices change
+  // Update sources when devices change or map becomes ready
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !mapReady) return;
 
     const alertFeatures: GeoJSON.Feature[] = [];
     const dotFeatures: GeoJSON.Feature[] = [];
@@ -544,7 +549,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       devices.forEach((d) => bounds.extend([d.lng, d.lat]));
       map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
     }
-  }, [devices, highlightDeviceId, floodDepths, floodCounts]);
+  }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
   // Search location marker
   useEffect(() => {
