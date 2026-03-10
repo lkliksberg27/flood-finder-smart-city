@@ -344,11 +344,15 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       // Update flood water on zoom/pan
       const updateWater = () => {
         try {
-          const roads = calculateFloodWater(map, devicesRef.current, floodDepthsRef.current, floodCountsRef.current);
+          const d = devicesRef.current;
+          const c = floodCountsRef.current;
+          console.log("[WATER]", d.length, "devs", Object.keys(c).length, "counts");
+          const roads = calculateFloodWater(map, d, floodDepthsRef.current, c);
+          console.log("[WATER] features:", roads.length);
           const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
           if (src) src.setData({ type: "FeatureCollection", features: roads });
-        } catch {
-          // queryRenderedFeatures can fail during transitions
+        } catch (e) {
+          console.log("[WATER] error:", e);
         }
       };
       map.on("moveend", updateWater);
