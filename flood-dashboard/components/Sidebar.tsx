@@ -15,6 +15,7 @@ import {
   Zap,
   LogOut,
   Globe,
+  Mountain,
 } from "lucide-react";
 import { useAuth } from "@/components/AuthGate";
 import { getSupabase } from "@/lib/supabase";
@@ -23,6 +24,7 @@ const navItems = [
   { href: "/", label: "Overview", icon: Map, description: "Live sensor map & weather" },
   { href: "/sensors", label: "Sensors", icon: Radio, description: "Manage all devices" },
   { href: "/flood-events", label: "Flood Events", icon: CloudRain, description: "Event history & filters" },
+  { href: "/elevation", label: "Elevation", icon: Mountain, description: "Road dip & elevation analysis" },
   { href: "/analytics", label: "Analytics", icon: BarChart3, description: "Neighborhood insights" },
   { href: "/ai-recommendations", label: "AI Analysis", icon: BrainCircuit, description: "Infrastructure recommendations" },
 ];

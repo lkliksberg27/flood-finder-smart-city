@@ -20,7 +20,7 @@ import {
   Search,
 } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
-import { getAllDevices, getActiveFloodEvents } from "@/lib/queries";
+import { getAllDevices, getActiveFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import { StatCard } from "@/components/StatCard";
 import type { Device, FloodEvent } from "@/lib/types";
 
@@ -82,6 +82,7 @@ function OverviewContent() {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [initialLoading, setInitialLoading] = useState(true);
 
   // Location search state
@@ -129,12 +130,14 @@ function OverviewContent() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [devs, events] = await Promise.all([
+      const [devs, events, counts] = await Promise.all([
         getAllDevices(),
         getActiveFloodEvents(),
+        getFloodEventCount30d(),
       ]);
       setDevices(devs);
       setActiveEvents(events);
+      setFloodCounts(counts);
       setLastUpdated(new Date());
       setInitialLoading(false);
     } catch (err) {
@@ -390,6 +393,7 @@ function OverviewContent() {
           highlightDeviceId={selectedDevice}
           searchLocation={selectedLocation}
           floodDepths={floodDepths}
+          floodCounts={floodCounts}
         />
       </div>
 
