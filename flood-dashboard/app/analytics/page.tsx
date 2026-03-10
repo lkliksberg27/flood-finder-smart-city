@@ -8,10 +8,12 @@ import {
   ScatterChart, Scatter, LineChart, Line,
   ResponsiveContainer, Cell, Legend,
 } from "recharts";
-import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp, Search, Mountain } from "lucide-react";
+import { Loader2, ArrowLeft, MapPin, AlertTriangle, Droplets, Clock, TrendingUp, Search, Mountain, Globe, X } from "lucide-react";
 import { getAllDevices, getAllFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import { haversineKm, streetElevation, findRoadDips, type DipInfo } from "@/lib/geo";
 import type { Device, FloodEvent } from "@/lib/types";
+
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
 const AnalyticsMap = dynamic(
   () => import("@/components/AnalyticsMap").then((m) => m.AnalyticsMap),
@@ -79,6 +81,8 @@ function AnalyticsContent() {
   const [selectedArea, setSelectedArea] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [areaSearch, setAreaSearch] = useState("");
+  const [geoResults, setGeoResults] = useState<Array<{ name: string; fullName: string; neighborhood: string }>>([]);
+  const [searchFocused, setSearchFocused] = useState(false);
 
   // Handle URL param for direct navigation from search
   useEffect(() => {
@@ -93,6 +97,48 @@ function AnalyticsContent() {
       getFloodEventCount30d().then(setFloodCounts),
     ]).catch(console.error).finally(() => setLoading(false));
   }, []);
+
+  // Geocode addresses for search (debounced)
+  useEffect(() => {
+    if (!areaSearch.trim() || areaSearch.length < 3) {
+      setGeoResults([]);
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(areaSearch)}.json?access_token=${MAPBOX_TOKEN}&limit=4`
+        );
+        const data = await res.json();
+        const places = (data.features ?? []).map((f: Record<string, unknown>) => {
+          const center = f.center as number[];
+          const lat = center[1];
+          const lng = center[0];
+          // Find nearest neighborhood by closest sensor
+          let nearestArea = "";
+          let minDist = Infinity;
+          allDevices.forEach((d) => {
+            const dist = haversineKm(lat, lng, d.lat, d.lng);
+            if (dist < minDist) {
+              minDist = dist;
+              nearestArea = d.neighborhood ?? "Other";
+            }
+          });
+          return {
+            name: (f as { text: string }).text,
+            fullName: (f as { place_name: string }).place_name,
+            neighborhood: nearestArea,
+          };
+        });
+        setGeoResults(places);
+      } catch {
+        setGeoResults([]);
+      }
+    }, 300);
+
+    return () => clearTimeout(timeout);
+  }, [areaSearch, allDevices]);
 
   // Build area summaries for landing page
   const areas = useMemo<AreaSummary[]>(() => {
@@ -178,16 +224,86 @@ function AnalyticsContent() {
           Select a neighborhood to view detailed flood patterns, risk factors, and infrastructure insights for that area.
         </p>
 
-        {/* Search areas */}
+        {/* Search areas or addresses */}
         <div className="relative mb-6">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary z-10" />
           <input
             type="text"
             value={areaSearch}
             onChange={(e) => setAreaSearch(e.target.value)}
-            placeholder="Search neighborhoods..."
-            className="bg-bg-card border border-border-card rounded-lg pl-8 pr-3 py-2 text-sm text-text-primary w-72"
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
+            placeholder="Search neighborhoods or any address..."
+            className="bg-bg-card border border-border-card rounded-lg pl-8 pr-9 py-2.5 text-sm text-text-primary w-[420px] focus:border-status-blue transition-colors"
           />
+          {areaSearch && (
+            <button
+              onClick={() => { setAreaSearch(""); setGeoResults([]); }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 z-10"
+            >
+              <X size={14} className="text-text-secondary hover:text-text-primary" />
+            </button>
+          )}
+
+          {/* Search dropdown */}
+          {searchFocused && areaSearch.trim() && (
+            <div className="absolute top-full left-0 mt-1 w-[420px] bg-bg-card border border-border-card rounded-lg shadow-xl z-50 overflow-hidden max-h-[360px] overflow-y-auto">
+              {/* Matching neighborhoods */}
+              {areas.filter((a) => a.name.toLowerCase().includes(areaSearch.toLowerCase())).map((a) => (
+                <button
+                  key={a.name}
+                  onMouseDown={() => {
+                    setSelectedArea(a.name);
+                    setAreaSearch("");
+                    setGeoResults([]);
+                  }}
+                  className="w-full text-left px-3 py-2.5 hover:bg-bg-card-hover transition-colors border-b border-border-card last:border-b-0 flex items-center gap-2.5"
+                >
+                  <MapPin size={13} className="text-status-blue shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-text-primary">{a.name}</p>
+                    <p className="text-xs text-text-secondary">
+                      {a.sensors} sensors, {a.events} flood events
+                    </p>
+                  </div>
+                  <span className="text-[10px] text-text-secondary uppercase shrink-0">Area</span>
+                </button>
+              ))}
+
+              {/* Geocoded addresses */}
+              {geoResults.map((r, i) => (
+                <button
+                  key={`geo-${i}`}
+                  onMouseDown={() => {
+                    setSelectedArea(r.neighborhood);
+                    setAreaSearch("");
+                    setGeoResults([]);
+                  }}
+                  className="w-full text-left px-3 py-2.5 hover:bg-bg-card-hover transition-colors border-b border-border-card last:border-b-0 flex items-center gap-2.5"
+                >
+                  <Globe size={13} className="text-status-amber shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-text-primary">{r.name}</p>
+                    <p className="text-xs text-text-secondary truncate">{r.fullName}</p>
+                    <p className="text-[10px] text-status-blue">Nearest area: {r.neighborhood}</p>
+                  </div>
+                  <span className="text-[10px] text-text-secondary uppercase shrink-0">Address</span>
+                </button>
+              ))}
+
+              {areas.filter((a) => a.name.toLowerCase().includes(areaSearch.toLowerCase())).length === 0 && geoResults.length === 0 && areaSearch.length >= 3 && (
+                <div className="px-3 py-4 text-center text-xs text-text-secondary">
+                  Searching...
+                </div>
+              )}
+
+              {areas.filter((a) => a.name.toLowerCase().includes(areaSearch.toLowerCase())).length === 0 && geoResults.length === 0 && areaSearch.length < 3 && (
+                <div className="px-3 py-4 text-center text-xs text-text-secondary">
+                  Type 3+ characters to search addresses
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* City-wide quick stats */}
@@ -291,7 +407,7 @@ function AnalyticsContent() {
 
         {/* Area cards */}
         <div className="grid grid-cols-2 gap-4">
-          {areas.filter((a) => !areaSearch || a.name.toLowerCase().includes(areaSearch.toLowerCase())).map((area) => {
+          {areas.map((area) => {
             const style = RISK_STYLES[area.riskLevel];
             return (
               <button
