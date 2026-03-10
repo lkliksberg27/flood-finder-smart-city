@@ -6,7 +6,7 @@ import {
   BrainCircuit, Loader2, TrendingDown, DollarSign, MapPin, Clock,
   Filter, RefreshCw, Search, ChevronDown, ChevronUp,
 } from "lucide-react";
-import { getRecommendations, getAllDevices } from "@/lib/queries";
+import { getRecommendations, getAllDevices, getFloodEventCount30d } from "@/lib/queries";
 import { useAuth } from "@/components/AuthGate";
 import { getSupabase } from "@/lib/supabase";
 import type { Recommendation, Device } from "@/lib/types";
@@ -77,6 +77,7 @@ export default function AIRecommendationsPage() {
   const { user } = useAuth();
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
   const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
   const [loading, setLoading] = useState(false);
@@ -105,6 +106,7 @@ export default function AIRecommendationsPage() {
     Promise.all([
       getRecommendations().then(setRecommendations),
       getAllDevices().then(setDevices),
+      getFloodEventCount30d().then(setFloodCounts),
     ]).catch(console.error).finally(() => setInitialLoading(false));
 
     getAllDevices().then((devs) => {
@@ -388,7 +390,7 @@ export default function AIRecommendationsPage() {
       {/* Mini map for selected recommendation */}
       {selectedRec && affectedDevices.length > 0 && (
         <div className="mb-6 h-[280px] rounded-lg overflow-hidden border border-border-card">
-          <DeviceMap devices={affectedDevices} />
+          <DeviceMap devices={affectedDevices} floodCounts={floodCounts} />
         </div>
       )}
 
