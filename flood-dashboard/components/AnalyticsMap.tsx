@@ -7,59 +7,90 @@ import type { Device, FloodEvent } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-/** Query road features near flood-affected devices for street-level water effect */
-function queryFloodRoadsAnalytics(
+/** Smart elevation-based flood water calculation for analytics map */
+function calculateAnalyticsFloodWater(
   map: mapboxgl.Map,
   devices: Device[],
-  stats: Record<string, { count: number; maxDepth: number }>,
-  maxCount: number,
+  stats: Record<string, { count: number; totalDepth: number; maxDepth: number }>,
 ): GeoJSON.Feature[] {
+  const sensors = devices.map((d) => {
+    const streetElev = (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100;
+    const s = stats[d.device_id] ?? { count: 0, totalDepth: 0, maxDepth: 0 };
+    return { lat: d.lat, lng: d.lng, elev: streetElev, score: s.count * 3 + s.maxDepth * 0.5 };
+  });
+
+  if (sensors.every((s) => s.score === 0)) return [];
+
+  const maxScore = Math.max(1, ...sensors.map((s) => s.score));
+  const minElev = Math.min(...sensors.map((s) => s.elev));
+  const maxElev = Math.max(...sensors.map((s) => s.elev));
+  const elevRange = maxElev - minElev || 1;
+  const avgSeverity = sensors.reduce((s, d) => s + d.score / maxScore, 0) / sensors.length;
+  const waterLine = minElev + (0.15 + avgSeverity * 0.5) * elevRange;
+
   const style = map.getStyle();
   if (!style?.layers) return [];
-
   const roadLayerIds = style.layers
-    .filter((l) => {
-      const sl = (l as Record<string, unknown>)["source-layer"];
-      return l.type === "line" && sl === "road";
-    })
+    .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
     .map((l) => l.id);
-
   if (roadLayerIds.length === 0) return [];
+
+  let sMinLat = 90, sMaxLat = -90, sMinLng = 180, sMaxLng = -180;
+  for (const s of sensors) {
+    if (s.lat < sMinLat) sMinLat = s.lat;
+    if (s.lat > sMaxLat) sMaxLat = s.lat;
+    if (s.lng < sMinLng) sMinLng = s.lng;
+    if (s.lng > sMaxLng) sMaxLng = s.lng;
+  }
+  const pad = 0.004;
+  const sw = map.project([sMinLng - pad, sMinLat - pad]);
+  const ne = map.project([sMaxLng + pad, sMaxLat + pad]);
+  const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
+    [Math.min(sw.x, ne.x), Math.min(sw.y, ne.y)],
+    [Math.max(sw.x, ne.x), Math.max(sw.y, ne.y)],
+  ];
 
   const features: GeoJSON.Feature[] = [];
   const seen = new Set<string>();
 
-  devices.forEach((d) => {
-    const s = stats[d.device_id];
-    if (!s || s.count <= 0) return;
+  try {
+    const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+    for (const f of roadFeatures) {
+      if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+      const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-    const point = map.project([d.lng, d.lat]);
-    const radius = Math.min(180, 60 + s.count * 12 + (s.maxDepth / 3));
+      const coords = f.geometry.type === "LineString" ? f.geometry.coordinates : f.geometry.coordinates[0];
+      if (!coords || coords.length === 0) continue;
+      const mid = Math.floor(coords.length / 2);
+      const cLng = coords[mid][0], cLat = coords[mid][1];
 
-    const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
-      [point.x - radius, point.y - radius],
-      [point.x + radius, point.y + radius],
-    ];
-
-    try {
-      const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
-      for (const f of roadFeatures) {
-        if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
-        const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        features.push({
-          type: "Feature",
-          geometry: f.geometry,
-          properties: {
-            intensity: Math.min(1, s.count / Math.max(maxCount, 1)),
-          },
-        });
+      let wElev = 0, wScore = 0, wTotal = 0;
+      const cosLat = Math.cos(cLat * Math.PI / 180);
+      for (const s of sensors) {
+        const dx = (s.lng - cLng) * 111320 * cosLat;
+        const dy = (s.lat - cLat) * 111320;
+        const w = 1 / (Math.max(Math.sqrt(dx * dx + dy * dy), 5) ** 2);
+        wElev += s.elev * w;
+        wScore += (s.score / maxScore) * w;
+        wTotal += w;
       }
-    } catch {
-      // can fail during transitions
+      if (wTotal === 0) continue;
+
+      const roadElev = wElev / wTotal;
+      const floodScore = wScore / wTotal;
+      const waterDepth = waterLine - roadElev;
+      if (waterDepth <= 0 || floodScore < 0.02) continue;
+
+      const intensity = Math.min(1, Math.min(1, waterDepth / 0.5) * 0.55 + floodScore * 0.45);
+      if (intensity < 0.05) continue;
+
+      features.push({ type: "Feature", geometry: f.geometry, properties: { intensity } });
     }
-  });
+  } catch {
+    // queryRenderedFeatures can fail during transitions
+  }
 
   return features;
 }
@@ -77,8 +108,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
   const containerRef = useRef<HTMLDivElement>(null);
   const sourcesReady = useRef(false);
   const devicesRef = useRef(devices);
-  const statsRef = useRef<Record<string, { count: number; maxDepth: number }>>({});
-  const maxCountRef = useRef(1);
+  const statsRef = useRef<Record<string, { count: number; totalDepth: number; maxDepth: number }>>({});
   devicesRef.current = devices;
 
   // Initialize map
@@ -100,8 +130,8 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     const map = mapRef.current;
 
     map.on("load", () => {
-      // Water depth heatmap circles (background glow)
-      map.addSource("flood-water", {
+      // Road flood water source
+      map.addSource("flood-roads", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
@@ -112,107 +142,40 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Road segments near floods — "water on streets" effect
-      map.addSource("flood-roads", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
-
-      // Water visualization — area glow circles
-      map.addLayer({
-        id: "flood-water-glow",
-        type: "circle",
-        source: "flood-water",
-        paint: {
-          "circle-radius": ["get", "radius"],
-          "circle-color": [
-            "interpolate",
-            ["linear"],
-            ["get", "severity"],
-            0, "rgba(59, 130, 246, 0.12)",
-            0.3, "rgba(59, 130, 246, 0.2)",
-            0.6, "rgba(248, 113, 113, 0.25)",
-            1, "rgba(248, 113, 113, 0.35)",
-          ],
-          "circle-blur": 0.6,
-        },
-      });
-
-      // Inner water ring
-      map.addLayer({
-        id: "flood-water-inner",
-        type: "circle",
-        source: "flood-water",
-        paint: {
-          "circle-radius": ["*", ["get", "radius"], 0.5],
-          "circle-color": [
-            "interpolate",
-            ["linear"],
-            ["get", "severity"],
-            0, "rgba(59, 130, 246, 0.15)",
-            0.5, "rgba(96, 165, 250, 0.25)",
-            1, "rgba(248, 113, 113, 0.4)",
-          ],
-          "circle-blur": 0.3,
-        },
-      });
-
-      // Road water — outer blue glow on streets
+      // Road water — outer glow
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#1565c0",
-          "line-width": [
-            "interpolate", ["linear"], ["zoom"],
-            12, 6, 14, 14, 16, 28, 18, 50,
-          ],
-          "line-opacity": [
-            "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.2, 0.5, 0.35, 1, 0.5,
-          ],
-          "line-blur": [
-            "interpolate", ["linear"], ["zoom"],
-            12, 3, 14, 5, 16, 8, 18, 12,
-          ],
+          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
+            0.1, "#1565c0", 0.5, "#1976d2", 1, "#1e88e5"],
+          "line-width": ["interpolate", ["linear"], ["zoom"],
+            12, 6, 14, 16, 16, 32, 18, 56],
+          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
+            0.05, 0.15, 0.3, 0.35, 0.7, 0.5, 1, 0.65],
+          "line-blur": ["interpolate", ["linear"], ["zoom"],
+            12, 3, 14, 5, 16, 8, 18, 14],
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Road water — brighter center
+      // Road water — bright center
       map.addLayer({
         id: "flood-road-water-bright",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#42a5f5",
-          "line-width": [
-            "interpolate", ["linear"], ["zoom"],
-            12, 3, 14, 7, 16, 15, 18, 28,
-          ],
-          "line-opacity": [
-            "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.15, 0.5, 0.3, 1, 0.45,
-          ],
-          "line-blur": [
-            "interpolate", ["linear"], ["zoom"],
-            12, 1, 14, 2, 16, 4, 18, 6,
-          ],
+          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
+            0.1, "#42a5f5", 0.5, "#64b5f6", 1, "#90caf9"],
+          "line-width": ["interpolate", ["linear"], ["zoom"],
+            12, 2, 14, 7, 16, 16, 18, 30],
+          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
+            0.05, 0.1, 0.3, 0.25, 0.7, 0.4, 1, 0.55],
+          "line-blur": ["interpolate", ["linear"], ["zoom"],
+            12, 1, 14, 2, 16, 4, 18, 7],
         },
         layout: { "line-cap": "round", "line-join": "round" },
-      });
-
-      // Update flood roads on zoom/pan
-      const updateRoads = () => {
-        if (!map.isStyleLoaded()) return;
-        const roads = queryFloodRoadsAnalytics(map, devicesRef.current, statsRef.current, maxCountRef.current);
-        const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-        if (src) src.setData({ type: "FeatureCollection", features: roads });
-      };
-      map.on("moveend", updateRoads);
-      map.on("sourcedata", (e) => {
-        if (e.sourceId === "composite" && e.isSourceLoaded) updateRoads();
       });
 
       // Sensor dots layer
@@ -255,6 +218,18 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
       sourcesReady.current = true;
 
+      // Update flood roads on zoom/pan
+      const updateWater = () => {
+        if (!map.isStyleLoaded()) return;
+        const roads = calculateAnalyticsFloodWater(map, devicesRef.current, statsRef.current);
+        const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+        if (src) src.setData({ type: "FeatureCollection", features: roads });
+      };
+      map.on("moveend", updateWater);
+      map.on("sourcedata", (e) => {
+        if (e.sourceId === "composite" && e.isSourceLoaded) updateWater();
+      });
+
       // Click handler
       map.on("click", "analytics-dots-layer", (e) => {
         if (!e.features?.[0]) return;
@@ -284,28 +259,13 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
             ${props.neighborhood ? `<div style="color:#6b7280;font-size:10px;margin-top:1px">${props.neighborhood}</div>` : ""}
             <hr style="border-color:#1f2937;margin:6px 0"/>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:11px">
-              <div>
-                <span style="color:#6b7280">Floods</span><br/>
-                <strong style="color:${severityColor}">${floodCount}</strong>
-              </div>
-              <div>
-                <span style="color:#6b7280">Avg Depth</span><br/>
-                <strong>${avgDepth}cm</strong>
-              </div>
-              <div>
-                <span style="color:#6b7280">Worst</span><br/>
-                <strong style="color:${maxDepth > 30 ? '#f87171' : '#d1d5db'}">${maxDepth}cm</strong>
-              </div>
+              <div><span style="color:#6b7280">Floods</span><br/><strong style="color:${severityColor}">${floodCount}</strong></div>
+              <div><span style="color:#6b7280">Avg Depth</span><br/><strong>${avgDepth}cm</strong></div>
+              <div><span style="color:#6b7280">Worst</span><br/><strong style="color:${maxDepth > 30 ? '#f87171' : '#d1d5db'}">${maxDepth}cm</strong></div>
             </div>
             <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">
-              <div>
-                <span style="color:#6b7280">Elevation</span><br/>
-                <strong style="color:${parseFloat(props.elevation) < 1.0 ? '#fbbf24' : '#d1d5db'}">${props.elevation}m</strong>
-              </div>
-              <div>
-                <span style="color:#6b7280">Battery</span><br/>
-                <strong>${parseFloat(props.battery).toFixed(1)}V</strong>
-              </div>
+              <div><span style="color:#6b7280">Elevation</span><br/><strong style="color:${parseFloat(props.elevation) < 1.0 ? '#fbbf24' : '#d1d5db'}">${props.elevation}m</strong></div>
+              <div><span style="color:#6b7280">Battery</span><br/><strong>${parseFloat(props.battery).toFixed(1)}V</strong></div>
             </div>
           </div>
         `;
@@ -336,12 +296,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     const map = mapRef.current;
     if (!map || !sourcesReady.current) return;
 
-    const waterSrc = map.getSource("flood-water") as mapboxgl.GeoJSONSource | undefined;
     const dotSrc = map.getSource("analytics-dots") as mapboxgl.GeoJSONSource | undefined;
-    if (!waterSrc || !dotSrc) return;
+    if (!dotSrc) return;
 
     if (devices.length === 0) {
-      waterSrc.setData({ type: "FeatureCollection", features: [] });
       dotSrc.setData({ type: "FeatureCollection", features: [] });
       return;
     }
@@ -359,55 +317,23 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     const maxFloodCount = Math.max(1, ...Object.values(deviceStats).map((s) => s.count));
 
-    // Update refs for road query function
+    // Update stats ref for road query
     statsRef.current = deviceStats;
-    maxCountRef.current = maxFloodCount;
 
-    // Water features (flood depth visualization)
-    const waterFeatures: GeoJSON.Feature[] = [];
     // Dot features
     const dotFeatures: GeoJSON.Feature[] = [];
 
     devices.forEach((d) => {
       const stats = deviceStats[d.device_id] ?? { count: 0, totalDepth: 0, maxDepth: 0, compound: 0 };
-      const severity = stats.count / maxFloodCount;
       const avgDepth = stats.count > 0 ? Math.round(stats.totalDepth / stats.count) : 0;
 
-      // Water glow — radius based on flood frequency + depth
-      if (stats.count > 0) {
-        const baseRadius = 25;
-        const depthFactor = Math.min(avgDepth / 30, 1);
-        const countFactor = Math.min(stats.count / 5, 1);
-        const radius = baseRadius + (depthFactor * 30) + (countFactor * 20);
-
-        waterFeatures.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: [d.lng, d.lat] },
-          properties: { radius, severity },
-        });
-      }
-
-      // Dot color: green → yellow → orange → red based on flood count
       let color: string;
       let strokeColor: string;
-      if (stats.count === 0) {
-        color = "#34d399";
-        strokeColor = "#065f46";
-      } else if (stats.count <= 2) {
-        color = "#fbbf24";
-        strokeColor = "#92400e";
-      } else if (stats.count <= 5) {
-        color = "#f97316";
-        strokeColor = "#9a3412";
-      } else {
-        color = "#f87171";
-        strokeColor = "#991b1b";
-      }
-
-      // If it has compound events, use a bright red stroke
-      if (stats.compound > 0) {
-        strokeColor = "#ff0000";
-      }
+      if (stats.count === 0) { color = "#34d399"; strokeColor = "#065f46"; }
+      else if (stats.count <= 2) { color = "#fbbf24"; strokeColor = "#92400e"; }
+      else if (stats.count <= 5) { color = "#f97316"; strokeColor = "#9a3412"; }
+      else { color = "#f87171"; strokeColor = "#991b1b"; }
+      if (stats.compound > 0) strokeColor = "#ff0000";
 
       dotFeatures.push({
         type: "Feature",
@@ -416,25 +342,23 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
           device_id: d.device_id,
           name: d.name ?? "",
           neighborhood: d.neighborhood ?? "",
-          color,
-          strokeColor,
+          color, strokeColor,
           floodCount: stats.count,
           avgDepth,
           maxDepth: stats.maxDepth,
-          elevation: (d.altitude_baro ?? 0).toFixed(2),
+          elevation: ((d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100).toFixed(2),
           battery: d.battery_v ?? 0,
           label: d.name ?? d.device_id,
         },
       });
     });
 
-    waterSrc.setData({ type: "FeatureCollection", features: waterFeatures });
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Update road-following flood water
+    // Update flood water on streets
     setTimeout(() => {
       if (!map.isStyleLoaded()) return;
-      const roads = queryFloodRoadsAnalytics(map, devices, deviceStats, maxFloodCount);
+      const roads = calculateAnalyticsFloodWater(map, devices, deviceStats);
       const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
       if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
     }, 300);

@@ -1,18 +1,48 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 
-const NEIGHBORHOODS = [
-  "Aventura North", "Aventura South", "Aventura West",
-  "Country Club", "Turnberry", "Biscayne Yacht Club",
-  "Mystic Pointe", "Williams Island",
-];
+/**
+ * Dense sensor placement along real Aventura streets.
+ * Sensors are positioned at actual intersections for realistic flood mapping.
+ * Elevation gradient: lower near Biscayne Blvd (east), higher inland (west).
+ * Southern sensors are lower than northern ones (natural drainage toward coast).
+ */
+const SENSOR_GRID = [
+  // ── Row 1: NE 199th St (northernmost) ──
+  { id: "FF-001", name: "NE 199th & Biscayne Blvd",  lat: 25.95965, lng: -80.14250, altBaro: 1.58, hood: "Biscayne Corridor" },
+  { id: "FF-002", name: "NE 199th & NE 29th Ave",    lat: 25.95945, lng: -80.13680, altBaro: 1.82, hood: "Central Aventura" },
+  { id: "FF-003", name: "NE 199th & NE 30th Ave",    lat: 25.95930, lng: -80.13200, altBaro: 2.05, hood: "West Aventura" },
 
-const STREET_NAMES = [
-  "NE 213th St", "NE 207th St", "NE 199th St", "Aventura Blvd",
-  "Biscayne Blvd", "Country Club Dr", "Yacht Club Way", "Mystic Pointe Dr",
-  "Island Blvd", "NE 190th St", "Turnberry Way", "NE 203rd St",
-  "Waterways Blvd", "NE 195th St", "NE 185th St", "Lehman Causeway",
-  "William Lehman Causeway", "NE 29th Ave", "NE 34th Ave", "NE 188th St",
+  // ── Row 2: NE 197th St ──
+  { id: "FF-004", name: "NE 197th & Biscayne Blvd",  lat: 25.95750, lng: -80.14220, altBaro: 1.32, hood: "Biscayne Corridor" },
+  { id: "FF-005", name: "NE 197th & NE 29th Ct",     lat: 25.95730, lng: -80.13650, altBaro: 1.55, hood: "Central Aventura" },
+
+  // ── Row 3: W Country Club Dr / NE 195th St ──
+  { id: "FF-006", name: "Country Club & Biscayne",    lat: 25.95545, lng: -80.14180, altBaro: 0.88, hood: "Biscayne Corridor" },
+  { id: "FF-007", name: "Country Club & NE 29th Ave", lat: 25.95530, lng: -80.13620, altBaro: 1.18, hood: "Central Aventura" },
+  { id: "FF-008", name: "Country Club & NE 30th Ave", lat: 25.95510, lng: -80.13150, altBaro: 1.68, hood: "West Aventura" },
+
+  // ── Row 4: NE 193rd St ──
+  { id: "FF-009", name: "NE 193rd & Biscayne Blvd",  lat: 25.95340, lng: -80.14160, altBaro: 0.72, hood: "Biscayne Corridor" },
+  { id: "FF-010", name: "NE 193rd & NE 29th Ave",    lat: 25.95320, lng: -80.13580, altBaro: 1.08, hood: "Central Aventura" },
+  { id: "FF-011", name: "NE 193rd & NE 30th Ave",    lat: 25.95300, lng: -80.13120, altBaro: 1.42, hood: "West Aventura" },
+
+  // ── Row 5: NE 191st St ──
+  { id: "FF-012", name: "NE 191st & Biscayne Blvd",  lat: 25.95160, lng: -80.14130, altBaro: 0.52, hood: "Biscayne Corridor" },
+  { id: "FF-013", name: "NE 191st & NE 29th Pl",     lat: 25.95145, lng: -80.13600, altBaro: 0.82, hood: "Central Aventura" },
+  { id: "FF-014", name: "NE 191st & NE 30th Ave",    lat: 25.95125, lng: -80.13180, altBaro: 1.28, hood: "West Aventura" },
+
+  // ── Row 6: NE 190th St ──
+  { id: "FF-015", name: "NE 190th & Biscayne Blvd",  lat: 25.95060, lng: -80.14100, altBaro: 0.38, hood: "Biscayne Corridor" },
+  { id: "FF-016", name: "NE 190th & NE 29th Ave",    lat: 25.95040, lng: -80.13560, altBaro: 0.68, hood: "Central Aventura" },
+
+  // ── Row 7: NE 188th St ──
+  { id: "FF-017", name: "NE 188th & Biscayne Blvd",  lat: 25.94860, lng: -80.14080, altBaro: 0.30, hood: "Biscayne Corridor" },
+  { id: "FF-018", name: "NE 188th & NE 29th Ave",    lat: 25.94840, lng: -80.13520, altBaro: 0.58, hood: "Central Aventura" },
+  { id: "FF-019", name: "NE 188th & NE 30th Ave",    lat: 25.94820, lng: -80.13100, altBaro: 1.12, hood: "West Aventura" },
+
+  // ── Row 8: NE 187th Ter (southernmost) ──
+  { id: "FF-020", name: "NE 187th & Biscayne Blvd",  lat: 25.94760, lng: -80.14060, altBaro: 0.22, hood: "Biscayne Corridor" },
 ];
 
 function randomBetween(min: number, max: number) {
@@ -27,31 +57,26 @@ export async function POST() {
   try {
     const supabase = createServiceClient();
 
-    // ── 1. Seed 20 devices ─────────────────────────────
-    const devices = Array.from({ length: 20 }, (_, i) => {
-      const id = `FF-${String(i + 1).padStart(3, "0")}`;
-      // Cluster devices realistically around Aventura
-      const baseLat = 25.94;
-      const baseLng = -80.14;
-      const lat = baseLat + (i % 5) * 0.005 + randomBetween(-0.002, 0.002);
-      const lng = baseLng + Math.floor(i / 5) * 0.006 + randomBetween(-0.002, 0.002);
-      const altBaro = parseFloat(randomBetween(0.4, 2.2).toFixed(2));
-
+    // ── 1. Seed 20 devices at exact street intersections ──
+    const devices = SENSOR_GRID.map((s, i) => {
+      const baselineCm = 90 + Math.floor(Math.random() * 6);
+      // Street elevation = altBaro - baseline/100
+      // Low-elev sensors near Biscayne Blvd are most flood-prone
       return {
-        device_id: id,
-        name: STREET_NAMES[i],
-        lat: parseFloat(lat.toFixed(6)),
-        lng: parseFloat(lng.toFixed(6)),
-        altitude_baro: altBaro,
+        device_id: s.id,
+        name: s.name,
+        lat: s.lat,
+        lng: s.lng,
+        altitude_baro: s.altBaro,
         mailbox_height_cm: 95,
-        baseline_distance_cm: 90 + Math.floor(Math.random() * 6),
-        status: i < 16 ? "online" : i < 18 ? "alert" : "offline",
-        battery_v: parseFloat(randomBetween(2.9, 4.2).toFixed(2)),
-        last_seen: i < 18
+        baseline_distance_cm: baselineCm,
+        status: i < 17 ? "online" : i < 19 ? "alert" : "offline" as const,
+        battery_v: parseFloat(randomBetween(3.0, 4.2).toFixed(2)),
+        last_seen: i < 19
           ? new Date(Date.now() - Math.random() * 600000).toISOString()
           : new Date(Date.now() - 5 * 3600000).toISOString(),
         installed_at: randomDate(90),
-        neighborhood: NEIGHBORHOODS[i % NEIGHBORHOODS.length],
+        neighborhood: s.hood,
       };
     });
 
@@ -59,37 +84,45 @@ export async function POST() {
       await supabase.from("devices").upsert(dev, { onConflict: "device_id" });
     }
 
-    // ── 2. Seed flood events (60-80 events over 30 days) ────
-    const eventCount = 60 + Math.floor(Math.random() * 20);
+    // ── 2. Seed flood events — heavily biased toward low-elevation sensors ──
+    // Low-elevation Biscayne Corridor sensors flood much more frequently
     const floodEvents = [];
-
-    for (let i = 0; i < eventCount; i++) {
-      const dev = devices[Math.floor(Math.random() * devices.length)];
-      // Lower elevation devices flood more
-      const elevBias = dev.altitude_baro < 1.2 ? 0.4 : dev.altitude_baro < 1.6 ? 0.25 : 0.1;
-      if (Math.random() > elevBias && dev.altitude_baro > 1.0) {
-        // Skip some events for high-elevation sensors
-        if (Math.random() > 0.3) continue;
+    for (let i = 0; i < 80; i++) {
+      // Weight device selection by inverse elevation (lower = more floods)
+      const weights = devices.map(d => {
+        const streetElev = d.altitude_baro - d.baseline_distance_cm / 100;
+        return Math.max(0.1, 1 - (streetElev + 0.7)); // -0.7m → weight 1.7, +1.0m → weight 0.1
+      });
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      let rand = Math.random() * totalWeight;
+      let devIdx = 0;
+      for (let j = 0; j < weights.length; j++) {
+        rand -= weights[j];
+        if (rand <= 0) { devIdx = j; break; }
       }
+      const dev = devices[devIdx];
 
       const startedAt = new Date(Date.now() - Math.random() * 28 * 86400 * 1000);
-      const durationMin = Math.floor(randomBetween(8, 180));
+      const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
+      // Lower sensors get deeper floods and longer duration
+      const elevFactor = Math.max(0.2, 1 - (streetElev + 0.7));
+      const durationMin = Math.floor(randomBetween(10, 120) * elevFactor + 15);
       const endedAt = new Date(startedAt.getTime() + durationMin * 60000);
-      const peakDepth = Math.floor(randomBetween(3, 55));
-      const hasRain = Math.random() < 0.65;
-      const hasTide = Math.random() < 0.4;
+      const peakDepth = Math.floor(randomBetween(5, 35) * elevFactor + 5);
+      const hasRain = Math.random() < 0.7;
+      const hasTide = Math.random() < 0.45;
 
       floodEvents.push({
         device_id: dev.device_id,
         started_at: startedAt.toISOString(),
         ended_at: endedAt.toISOString(),
         peak_depth_cm: peakDepth,
-        rainfall_mm: hasRain ? parseFloat(randomBetween(2, 45).toFixed(1)) : null,
-        tide_level_m: hasTide ? parseFloat(randomBetween(0.1, 0.8).toFixed(2)) : null,
+        rainfall_mm: hasRain ? parseFloat(randomBetween(5, 50).toFixed(1)) : null,
+        tide_level_m: hasTide ? parseFloat(randomBetween(0.15, 0.7).toFixed(2)) : null,
       });
     }
 
-    // Insert in batches
+    // Insert flood events in batches
     const floodErrors: string[] = [];
     let floodInserted = 0;
     for (let i = 0; i < floodEvents.length; i += 20) {
@@ -103,14 +136,17 @@ export async function POST() {
       }
     }
 
-    // ── 3. Seed some sensor readings for recent 24h ────
+    // ── 3. Seed sensor readings for recent 24h ──
     const readings = [];
-    for (const dev of devices.slice(0, 16)) {
+    for (const dev of devices.filter(d => d.status !== "offline")) {
+      const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
       for (let h = 0; h < 24; h += 2) {
         const recordedAt = new Date(Date.now() - h * 3600000);
-        const isFlooding = Math.random() < 0.08;
+        // Low-elevation sensors more likely to show water
+        const floodChance = Math.max(0.02, 0.15 - streetElev * 0.1);
+        const isFlooding = Math.random() < floodChance;
         const distanceCm = isFlooding
-          ? Math.floor(randomBetween(40, 80))
+          ? Math.floor(randomBetween(45, 80))
           : Math.floor(randomBetween(88, 96));
         const floodDepth = Math.max(0, 95 - distanceCm - 5);
 
