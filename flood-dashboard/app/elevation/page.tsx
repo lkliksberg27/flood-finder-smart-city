@@ -31,25 +31,32 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/** Street elevation = sensor altitude minus distance to ground (baseline) */
+function streetElevation(d: Device): number {
+  if (d.altitude_baro == null) return 0;
+  return d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100;
+}
+
 function analyzeRoadDips(devices: Device[], floodCounts: Record<string, number>): DipAnalysis[] {
   const withElev = devices.filter((d) => d.altitude_baro != null);
   if (withElev.length < 3) return [];
 
   return withElev.map((d) => {
+    const elev = streetElevation(d);
     const neighbors = withElev
       .filter((n) => n.device_id !== d.device_id)
       .map((n) => ({ ...n, dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
       .sort((a, b) => a.dist - b.dist)
       .slice(0, 3);
 
-    const avgNeighborElev = neighbors.reduce((s, n) => s + (n.altitude_baro ?? 0), 0) / neighbors.length;
-    const diff = (d.altitude_baro ?? 0) - avgNeighborElev;
+    const avgNeighborElev = neighbors.reduce((s, n) => s + streetElevation(n), 0) / neighbors.length;
+    const diff = elev - avgNeighborElev;
 
     return {
       device_id: d.device_id,
       name: d.name,
       neighborhood: d.neighborhood,
-      elevation_m: d.altitude_baro ?? 0,
+      elevation_m: parseFloat(elev.toFixed(2)),
       avg_neighbor_elevation_m: parseFloat(avgNeighborElev.toFixed(2)),
       depth_below_neighbors_cm: Math.round(-diff * 100),
       flood_count_30d: floodCounts[d.device_id] ?? 0,
@@ -74,7 +81,7 @@ export default function ElevationPage() {
 
   const sorted = [...devices]
     .filter((d) => d.altitude_baro != null)
-    .sort((a, b) => (a.altitude_baro ?? 0) - (b.altitude_baro ?? 0))
+    .sort((a, b) => streetElevation(a) - streetElevation(b))
     .slice(0, 10);
 
   const dips = analyzeRoadDips(devices, floodCounts);
@@ -160,7 +167,9 @@ export default function ElevationPage() {
           <div>
             <h3 className="text-sm font-semibold mb-3">Lowest 10 Locations</h3>
             <div className="space-y-2">
-              {sorted.map((d, i) => (
+              {sorted.map((d, i) => {
+                const elev = streetElevation(d);
+                return (
                 <div key={d.device_id} className="bg-bg-card border border-border-card rounded p-3">
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-mono">
@@ -168,9 +177,9 @@ export default function ElevationPage() {
                       {d.device_id}
                     </span>
                     <span className={`text-sm font-bold ${
-                      (d.altitude_baro ?? 0) < 1 ? "text-status-red" : "text-status-amber"
+                      elev < 1 ? "text-status-red" : "text-status-amber"
                     }`}>
-                      {d.altitude_baro?.toFixed(2)}m
+                      {elev.toFixed(2)}m
                     </span>
                   </div>
                   <div className="flex justify-between mt-0.5">
@@ -182,7 +191,8 @@ export default function ElevationPage() {
                     </span>
                   </div>
                 </div>
-              ))}
+                );
+              })}
               {sorted.length === 0 && (
                 <p className="text-sm text-text-secondary">No elevation data yet.</p>
               )}
@@ -196,7 +206,7 @@ export default function ElevationPage() {
               const n = d.neighborhood ?? "Unknown";
               if (!nStats[n]) nStats[n] = { count: 0, avgElev: 0, dips: 0, floods: 0 };
               nStats[n].count++;
-              nStats[n].avgElev += d.altitude_baro ?? 0;
+              nStats[n].avgElev += streetElevation(d);
               nStats[n].floods += floodCounts[d.device_id] ?? 0;
             });
             dips.forEach((d) => {
@@ -238,11 +248,11 @@ export default function ElevationPage() {
           {(() => {
             const withElev = devices.filter((d) => d.altitude_baro != null);
             if (withElev.length === 0) return null;
-            const elevs = withElev.map((d) => d.altitude_baro!);
+            const elevs = withElev.map((d) => streetElevation(d));
             const minElev = Math.min(...elevs);
             const maxElev = Math.max(...elevs);
             const avgElev = elevs.reduce((s, e) => s + e, 0) / elevs.length;
-            const belowSeaLevel = withElev.filter((d) => d.altitude_baro! < 0.5).length;
+            const belowSeaLevel = withElev.filter((d) => streetElevation(d) < 0.5).length;
             return (
               <div className="bg-bg-card border border-border-card rounded-lg p-4">
                 <h3 className="text-sm font-semibold mb-3">Elevation Summary</h3>

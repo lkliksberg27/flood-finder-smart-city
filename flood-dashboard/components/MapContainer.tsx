@@ -51,9 +51,10 @@ interface Props {
   height?: string;
   searchLocation?: { lng: number; lat: number } | null;
   floodDepths?: Record<string, number>;
+  floodCounts?: Record<string, number>;
 }
 
-export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation, floodDepths }: Props) {
+export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation, floodDepths, floodCounts }: Props) {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -175,6 +176,33 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
             1, "rgba(5,50,150,0.55)",
           ],
           "heatmap-opacity": 0.85,
+        },
+      });
+
+      // Flood-prone zones — blue circles showing historical flood areas
+      map.addSource("flood-zones", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "flood-zones-fill",
+        type: "circle",
+        source: "flood-zones",
+        paint: {
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 20,
+            0.5, 35,
+            1, 55,
+          ],
+          "circle-color": "#3b82f6",
+          "circle-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.08,
+            0.5, 0.15,
+            1, 0.25,
+          ],
+          "circle-blur": 0.6,
         },
       });
 
@@ -376,13 +404,34 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const floodSrc = map.getSource("flood-water") as mapboxgl.GeoJSONSource | undefined;
     if (floodSrc) floodSrc.setData({ type: "FeatureCollection", features: floodFeatures });
 
+    // Update flood-prone zones from historical data
+    const zoneFeatures: GeoJSON.Feature[] = [];
+    if (floodCounts) {
+      const maxCount = Math.max(1, ...Object.values(floodCounts));
+      devices.forEach((device) => {
+        const count = floodCounts[device.device_id];
+        if (count && count > 0) {
+          zoneFeatures.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [device.lng, device.lat] },
+            properties: {
+              count,
+              intensity: Math.min(1, count / maxCount),
+            },
+          });
+        }
+      });
+    }
+    const zoneSrc = map.getSource("flood-zones") as mapboxgl.GeoJSONSource | undefined;
+    if (zoneSrc) zoneSrc.setData({ type: "FeatureCollection", features: zoneFeatures });
+
     // Fit bounds if we have devices
     if (devices.length > 0 && map.getZoom() === 14) {
       const bounds = new mapboxgl.LngLatBounds();
       devices.forEach((d) => bounds.extend([d.lng, d.lat]));
       map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
     }
-  }, [devices, highlightDeviceId, floodDepths]);
+  }, [devices, highlightDeviceId, floodDepths, floodCounts]);
 
   // Search location marker
   useEffect(() => {
@@ -450,9 +499,13 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#f87171", display: "inline-block" }} />
           <span>Flood Alert</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#6b7280", display: "inline-block" }} />
           <span>Offline</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "rgba(59,130,246,0.4)", display: "inline-block", border: "1px solid rgba(59,130,246,0.6)" }} />
+          <span>Flood Zone</span>
         </div>
       </div>
     </div>
