@@ -50,9 +50,10 @@ interface Props {
   highlightDeviceId?: string | null;
   height?: string;
   searchLocation?: { lng: number; lat: number } | null;
+  floodDepths?: Record<string, number>;
 }
 
-export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation }: Props) {
+export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation, floodDepths }: Props) {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -146,6 +147,37 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         data: { type: "FeatureCollection", features: [] },
       });
 
+      // Flood water visualization — blue heatmap showing flooded areas
+      map.addSource("flood-water", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "flood-water-heatmap",
+        type: "heatmap",
+        source: "flood-water",
+        paint: {
+          "heatmap-weight": ["get", "weight"],
+          "heatmap-intensity": 0.6,
+          "heatmap-radius": [
+            "interpolate", ["linear"], ["get", "depth"],
+            5, 35,
+            20, 65,
+            50, 100,
+          ],
+          "heatmap-color": [
+            "interpolate", ["linear"], ["heatmap-density"],
+            0, "rgba(0,0,0,0)",
+            0.1, "rgba(30,100,200,0.1)",
+            0.3, "rgba(30,130,230,0.25)",
+            0.5, "rgba(20,100,210,0.35)",
+            0.7, "rgba(10,70,180,0.45)",
+            1, "rgba(5,50,150,0.55)",
+          ],
+          "heatmap-opacity": 0.85,
+        },
+      });
+
       // Alert rings (larger semi-transparent circles for alerting sensors)
       map.addLayer({
         id: "device-alert-rings",
@@ -197,6 +229,13 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         const battPct = Math.max(0, Math.min(100, ((battV - 2.8) / 1.4) * 100));
         const battColor = battPct > 60 ? "#34d399" : battPct > 25 ? "#fbbf24" : "#f87171";
 
+        // Street elevation = sensor altitude - distance to ground
+        const altBaro = parseFloat(props.altitude_baro) || 0;
+        const baselineCm = parseFloat(props.baseline_distance_cm) || 0;
+        const streetElev = altBaro > 0
+          ? (baselineCm > 0 ? (altBaro - baselineCm / 100).toFixed(2) : altBaro.toFixed(2))
+          : "—";
+
         const popupHTML = `
           <div style="font-family:'DM Sans',sans-serif;min-width:220px">
             <div style="display:flex;justify-content:space-between;align-items:center">
@@ -207,8 +246,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
             <hr style="border-color:#1f2937;margin:8px 0"/>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
               <div>
-                <span style="color:#6b7280">Elevation</span><br/>
-                <span style="font-weight:600">${props.altitude_baro ?? "—"}m</span>
+                <span style="color:#6b7280">Street Elev.</span><br/>
+                <span style="font-weight:600">${streetElev}m</span>
               </div>
               <div>
                 <span style="color:#6b7280">Last Seen</span><br/>
@@ -302,7 +341,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           status: device.status,
           color,
           highlighted: isHighlighted,
-          altitude_baro: device.altitude_baro?.toFixed(2) ?? "—",
+          altitude_baro: device.altitude_baro ?? 0,
+          baseline_distance_cm: device.baseline_distance_cm ?? 0,
           battery_v: device.battery_v ?? 0,
           neighborhood: device.neighborhood ?? "",
           last_seen_text: lastSeenText,
@@ -316,13 +356,33 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alertFeatures });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
+    // Update flood water visualization
+    const floodFeatures: GeoJSON.Feature[] = [];
+    if (floodDepths) {
+      devices.forEach((device) => {
+        const depth = floodDepths[device.device_id];
+        if (depth && depth > 0) {
+          floodFeatures.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [device.lng, device.lat] },
+            properties: {
+              depth,
+              weight: Math.min(1, depth / 30),
+            },
+          });
+        }
+      });
+    }
+    const floodSrc = map.getSource("flood-water") as mapboxgl.GeoJSONSource | undefined;
+    if (floodSrc) floodSrc.setData({ type: "FeatureCollection", features: floodFeatures });
+
     // Fit bounds if we have devices
     if (devices.length > 0 && map.getZoom() === 14) {
       const bounds = new mapboxgl.LngLatBounds();
       devices.forEach((d) => bounds.extend([d.lng, d.lat]));
       map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
     }
-  }, [devices, highlightDeviceId]);
+  }, [devices, highlightDeviceId, floodDepths]);
 
   // Search location marker
   useEffect(() => {

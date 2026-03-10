@@ -250,6 +250,12 @@ function OverviewContent() {
 
   const closeSensors = nearbySensors.filter((s) => s.distance <= 10);
 
+  // Build flood depths map for map visualization
+  const floodDepths: Record<string, number> = {};
+  activeEvents.forEach((e) => {
+    floodDepths[e.device_id] = Math.max(floodDepths[e.device_id] ?? 0, e.peak_depth_cm);
+  });
+
   const online = devices.filter((d) => d.status !== "offline").length;
   const offline = devices.filter((d) => d.status === "offline").length;
   const avgBattery =
@@ -372,6 +378,7 @@ function OverviewContent() {
           onDeviceClick={(d) => setSelectedDevice(d.device_id)}
           highlightDeviceId={selectedDevice}
           searchLocation={selectedLocation}
+          floodDepths={floodDepths}
         />
       </div>
 
