@@ -218,15 +218,20 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
       setMapReady(true);
 
-      // Update flood roads on zoom/pan
+      // Update flood roads on zoom/pan (throttled)
+      let waterTimer: ReturnType<typeof setTimeout> | null = null;
       const updateWater = () => {
-        try {
-          const roads = calculateAnalyticsFloodWater(map, devicesRef.current, statsRef.current);
-          const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-          if (src) src.setData({ type: "FeatureCollection", features: roads });
-        } catch {
-          // can fail during transitions
-        }
+        if (waterTimer) return;
+        waterTimer = setTimeout(() => {
+          waterTimer = null;
+          try {
+            const roads = calculateAnalyticsFloodWater(map, devicesRef.current, statsRef.current);
+            const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+            if (src) src.setData({ type: "FeatureCollection", features: roads });
+          } catch {
+            // can fail during transitions
+          }
+        }, 100);
       };
       map.on("moveend", updateWater);
       map.on("idle", updateWater);
