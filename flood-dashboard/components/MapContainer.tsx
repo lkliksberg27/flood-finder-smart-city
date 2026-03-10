@@ -44,6 +44,71 @@ function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): str
     </div>`;
 }
 
+/** Query road features from Mapbox vector tiles near flood-affected devices */
+function queryFloodRoads(
+  map: mapboxgl.Map,
+  devices: Device[],
+  depths: Record<string, number>,
+  counts: Record<string, number>,
+): GeoJSON.Feature[] {
+  const style = map.getStyle();
+  if (!style?.layers) return [];
+
+  // Find road line layer IDs in the mapbox style
+  const roadLayerIds = style.layers
+    .filter((l) => {
+      const sl = (l as Record<string, unknown>)["source-layer"];
+      return l.type === "line" && (sl === "road" || sl === "road-label");
+    })
+    .filter((l) => l.type === "line")
+    .map((l) => l.id);
+
+  if (roadLayerIds.length === 0) return [];
+
+  const features: GeoJSON.Feature[] = [];
+  const seen = new Set<string>();
+
+  devices.forEach((device) => {
+    const depth = depths[device.device_id] ?? 0;
+    const count = counts[device.device_id] ?? 0;
+    if (depth <= 0 && count <= 0) return;
+
+    const point = map.project([device.lng, device.lat]);
+    // Active floods get larger radius; historical zones smaller
+    const radius = depth > 0
+      ? Math.min(220, 100 + depth * 4)
+      : Math.min(160, 60 + count * 10);
+
+    const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
+      [point.x - radius, point.y - radius],
+      [point.x + radius, point.y + radius],
+    ];
+
+    try {
+      const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+      for (const f of roadFeatures) {
+        if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+        const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        features.push({
+          type: "Feature",
+          geometry: f.geometry,
+          properties: {
+            intensity: depth > 0
+              ? Math.min(1, depth / 20)
+              : Math.min(0.7, count / 6),
+          },
+        });
+      }
+    } catch {
+      // queryRenderedFeatures can fail during style transitions
+    }
+  });
+
+  return features;
+}
+
 interface Props {
   devices: Device[];
   onDeviceClick?: (device: Device) => void;
@@ -62,8 +127,13 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
   const devicesRef = useRef<Device[]>(devices);
   const onDeviceClickRef = useRef(onDeviceClick);
 
+  const floodDepthsRef = useRef<Record<string, number>>({});
+  const floodCountsRef = useRef<Record<string, number>>({});
+
   devicesRef.current = devices;
   onDeviceClickRef.current = onDeviceClick;
+  floodDepthsRef.current = floodDepths ?? {};
+  floodCountsRef.current = floodCounts ?? {};
 
   const loadPopupData = useCallback(async (deviceId: string) => {
     try {
@@ -148,21 +218,28 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // ── Flood water visualization (multi-layer for realistic look) ──
+      // ── Flood water visualization ──
+      // Uses 3 approaches: area glow (circles), road water (vector tile roads), active pulse
 
-      // Source for active floods
+      // Source for active floods (circle glow)
       map.addSource("flood-water", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Source for historical flood-prone zones
+      // Source for historical flood-prone zones (circle glow)
       map.addSource("flood-zones", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Layer 1: Historical flood zones — wide soft blue glow (outer water spread)
+      // Source for road segments near floods (the key "water on streets" effect)
+      map.addSource("flood-roads", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+
+      // ── Layer 1: Historical flood zones — area glow ──
       map.addLayer({
         id: "flood-zones-outer",
         type: "circle",
@@ -170,22 +247,22 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 30,
-            0.5, 55,
-            1, 80,
+            0.1, 35,
+            0.5, 65,
+            1, 100,
           ],
           "circle-color": "#1d4ed8",
           "circle-opacity": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.06,
-            0.5, 0.12,
-            1, 0.18,
+            0.1, 0.08,
+            0.5, 0.16,
+            1, 0.25,
           ],
           "circle-blur": 1,
         },
       });
 
-      // Layer 2: Historical flood zones — tighter water body
+      // ── Layer 2: Historical flood zones — tighter core ──
       map.addLayer({
         id: "flood-zones-inner",
         type: "circle",
@@ -193,22 +270,90 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 14,
-            0.5, 25,
-            1, 40,
+            0.1, 16,
+            0.5, 30,
+            1, 50,
           ],
           "circle-color": "#2563eb",
           "circle-opacity": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.1,
-            0.5, 0.2,
-            1, 0.3,
+            0.1, 0.12,
+            0.5, 0.25,
+            1, 0.4,
           ],
-          "circle-blur": 0.4,
+          "circle-blur": 0.5,
         },
       });
 
-      // Layer 3: Active flood — bright blue water spread
+      // ── Layer 3: Road water — outer blue glow on streets ──
+      map.addLayer({
+        id: "flood-road-water",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": "#1565c0",
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 6,
+            14, 14,
+            16, 28,
+            18, 50,
+          ],
+          "line-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.2,
+            0.5, 0.35,
+            1, 0.5,
+          ],
+          "line-blur": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 3,
+            14, 5,
+            16, 8,
+            18, 12,
+          ],
+        },
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+      });
+
+      // ── Layer 4: Road water — brighter center stream ──
+      map.addLayer({
+        id: "flood-road-water-bright",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": "#42a5f5",
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 3,
+            14, 7,
+            16, 15,
+            18, 28,
+          ],
+          "line-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.15,
+            0.5, 0.3,
+            1, 0.45,
+          ],
+          "line-blur": [
+            "interpolate", ["linear"], ["zoom"],
+            12, 1,
+            14, 2,
+            16, 4,
+            18, 6,
+          ],
+        },
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+      });
+
+      // ── Layer 5: Active flood — bright area spread ──
       map.addLayer({
         id: "flood-water-spread",
         type: "circle",
@@ -216,22 +361,22 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["get", "depth"],
-            5, 40,
-            20, 70,
-            50, 110,
+            5, 50,
+            20, 90,
+            50, 140,
           ],
           "circle-color": "#1e40af",
           "circle-opacity": [
             "interpolate", ["linear"], ["get", "depth"],
-            5, 0.15,
-            20, 0.25,
-            50, 0.35,
+            5, 0.18,
+            20, 0.3,
+            50, 0.42,
           ],
           "circle-blur": 0.8,
         },
       });
 
-      // Layer 4: Active flood — solid water center
+      // ── Layer 6: Active flood — solid water center ──
       map.addLayer({
         id: "flood-water-core",
         type: "circle",
@@ -239,22 +384,34 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "circle-radius": [
             "interpolate", ["linear"], ["get", "depth"],
-            5, 18,
-            20, 35,
-            50, 55,
+            5, 22,
+            20, 45,
+            50, 70,
           ],
           "circle-color": "#3b82f6",
           "circle-opacity": [
             "interpolate", ["linear"], ["get", "depth"],
-            5, 0.3,
-            20, 0.45,
-            50, 0.55,
+            5, 0.35,
+            20, 0.5,
+            50, 0.65,
           ],
           "circle-blur": 0.3,
-          "circle-stroke-width": 1.5,
+          "circle-stroke-width": 2,
           "circle-stroke-color": "#60a5fa",
-          "circle-stroke-opacity": 0.4,
+          "circle-stroke-opacity": 0.5,
         },
+      });
+
+      // ── Update flood roads on zoom/pan ──
+      const updateRoads = () => {
+        if (!map.isStyleLoaded()) return;
+        const roads = queryFloodRoads(map, devicesRef.current, floodDepthsRef.current, floodCountsRef.current);
+        const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+        if (src) src.setData({ type: "FeatureCollection", features: roads });
+      };
+      map.on("moveend", updateRoads);
+      map.on("sourcedata", (e) => {
+        if (e.sourceId === "composite" && e.isSourceLoaded) updateRoads();
       });
 
       // Alert rings (larger semi-transparent circles for alerting sensors)
@@ -476,6 +633,14 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const zoneSrc = map.getSource("flood-zones") as mapboxgl.GeoJSONSource | undefined;
     if (zoneSrc) zoneSrc.setData({ type: "FeatureCollection", features: zoneFeatures });
 
+    // Update road-following flood water after a short delay (tiles need to render first)
+    setTimeout(() => {
+      if (!map.isStyleLoaded()) return;
+      const roads = queryFloodRoads(map, devices, floodDepths ?? {}, floodCounts ?? {});
+      const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+    }, 300);
+
     // Fit bounds if we have devices
     if (devices.length > 0 && map.getZoom() === 14) {
       const bounds = new mapboxgl.LngLatBounds();
@@ -555,8 +720,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           <span>Offline</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "rgba(59,130,246,0.4)", display: "inline-block", border: "1px solid rgba(59,130,246,0.6)" }} />
-          <span>Flood Zone</span>
+          <span style={{ width: 10, height: 4, borderRadius: 2, background: "rgba(66,165,245,0.6)", display: "inline-block" }} />
+          <span>Flooded Streets</span>
         </div>
       </div>
     </div>
