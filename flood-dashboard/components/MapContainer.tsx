@@ -417,6 +417,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         zoom: 13,
         duration: 1500,
       });
+    } else if (devicesRef.current.length > 0) {
+      // Fly back to sensor network bounds when search is cleared
+      const bounds = new mapboxgl.LngLatBounds();
+      devicesRef.current.forEach((d) => bounds.extend([d.lng, d.lat]));
+      map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 1200 });
     }
   }, [searchLocation]);
 

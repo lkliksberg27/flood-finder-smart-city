@@ -74,6 +74,7 @@ function findRoadDips(devices: Device[], floodCounts: Record<string, number>): D
       .sort((a, b) => a.dist - b.dist)
       .slice(0, 3);
 
+    if (neighbors.length === 0) return { device_id: d.device_id, name: d.name, elevation_m: elev, avgNeighborElev: 0, dipCm: 0, floodCount: 0 };
     const avgNeighborElev = neighbors.reduce((s, n) => s + n.elev, 0) / neighbors.length;
     const diff = elev - avgNeighborElev;
 

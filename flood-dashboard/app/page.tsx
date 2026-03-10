@@ -94,6 +94,7 @@ function OverviewContent() {
     fullName: string;
   } | null>(null);
   const [geocoding, setGeocoding] = useState(false);
+  const [geocodeError, setGeocodeError] = useState("");
 
   // Read ?location= param from URL (from Ctrl+K "Search on map")
   useEffect(() => {
@@ -191,21 +192,24 @@ function OverviewContent() {
     }
 
     const timeout = setTimeout(async () => {
+      setGeocodeError("");
       try {
         const res = await fetch(
           `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(locationSearch)}.json?access_token=${MAPBOX_TOKEN}&limit=5`
         );
         const data = await res.json();
-        setLocationResults(
+        const results =
           data.features?.map((f: Record<string, unknown>) => ({
             name: (f as { text: string }).text,
             fullName: (f as { place_name: string }).place_name,
             lng: (f as { center: number[] }).center[0],
             lat: (f as { center: number[] }).center[1],
-          })) ?? []
-        );
+          })) ?? [];
+        setLocationResults(results);
+        if (results.length === 0) setGeocodeError("No places found");
       } catch {
         setLocationResults([]);
+        setGeocodeError("Search failed — check your connection");
       }
     }, 300);
 
@@ -227,6 +231,7 @@ function OverviewContent() {
     setSelectedLocation(null);
     setLocationSearch("");
     setLocationResults([]);
+    setGeocodeError("");
     // Clear URL param if present
     if (searchParams.get("location")) {
       window.history.replaceState(null, "", "/");
@@ -369,6 +374,12 @@ function OverviewContent() {
               <span className="text-xs text-text-secondary">
                 Searching...
               </span>
+            </div>
+          )}
+
+          {geocodeError && !selectedLocation && !geocoding && locationResults.length === 0 && (
+            <div className="mt-1 bg-bg-card/95 backdrop-blur-sm border border-border-card rounded-lg p-3">
+              <p className="text-xs text-text-secondary">{geocodeError}</p>
             </div>
           )}
         </div>
