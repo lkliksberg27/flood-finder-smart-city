@@ -220,15 +220,16 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
       // Update flood roads on zoom/pan
       const updateWater = () => {
-        if (!map.isStyleLoaded()) return;
-        const roads = calculateAnalyticsFloodWater(map, devicesRef.current, statsRef.current);
-        const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-        if (src) src.setData({ type: "FeatureCollection", features: roads });
+        try {
+          const roads = calculateAnalyticsFloodWater(map, devicesRef.current, statsRef.current);
+          const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+          if (src) src.setData({ type: "FeatureCollection", features: roads });
+        } catch {
+          // can fail during transitions
+        }
       };
       map.on("moveend", updateWater);
-      map.on("sourcedata", (e) => {
-        if (e.sourceId === "composite" && e.isSourceLoaded) updateWater();
-      });
+      map.on("idle", updateWater);
 
       // Click handler
       map.on("click", "analytics-dots-layer", (e) => {
@@ -355,13 +356,16 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Update flood water on streets
-    setTimeout(() => {
-      if (!map.isStyleLoaded()) return;
-      const roads = calculateAnalyticsFloodWater(map, devices, deviceStats);
-      const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
-    }, 300);
+    // Update flood water after map finishes rendering tiles
+    map.once("idle", () => {
+      try {
+        const roads = calculateAnalyticsFloodWater(map, devices, deviceStats);
+        const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+        if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+      } catch {
+        // can fail during transitions
+      }
+    });
 
     // Fit bounds
     if (devices.length > 1) {
