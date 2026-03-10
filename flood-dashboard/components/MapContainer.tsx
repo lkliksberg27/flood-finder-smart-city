@@ -49,12 +49,14 @@ interface Props {
   onDeviceClick?: (device: Device) => void;
   highlightDeviceId?: string | null;
   height?: string;
+  searchLocation?: { lng: number; lat: number } | null;
 }
 
-export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%" }: Props) {
+export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation }: Props) {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const searchMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const devicesRef = useRef<Device[]>(devices);
   const onDeviceClickRef = useRef(onDeviceClick);
 
@@ -321,6 +323,42 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
     }
   }, [devices, highlightDeviceId]);
+
+  // Search location marker
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (searchMarkerRef.current) {
+      searchMarkerRef.current.remove();
+      searchMarkerRef.current = null;
+    }
+
+    if (searchLocation) {
+      const el = document.createElement("div");
+      el.innerHTML = `
+        <div style="position:relative;width:32px;height:42px;cursor:pointer">
+          <svg viewBox="0 0 32 42" width="32" height="42">
+            <path d="M16 0C7.16 0 0 7.16 0 16c0 12 16 26 16 26s16-14 16-26C32 7.16 24.84 0 16 0z" fill="#3b82f6"/>
+            <circle cx="16" cy="16" r="6" fill="white"/>
+          </svg>
+          <div style="position:absolute;top:8px;left:50%;width:48px;height:48px;margin-left:-24px;border-radius:50%;background:rgba(59,130,246,0.2);animation:searchPulse 2s ease-out infinite;pointer-events:none"></div>
+        </div>`;
+
+      searchMarkerRef.current = new mapboxgl.Marker({
+        element: el,
+        anchor: "bottom",
+      })
+        .setLngLat([searchLocation.lng, searchLocation.lat])
+        .addTo(map);
+
+      map.flyTo({
+        center: [searchLocation.lng, searchLocation.lat],
+        zoom: 13,
+        duration: 1500,
+      });
+    }
+  }, [searchLocation]);
 
   return (
     <div style={{ position: "relative", height, width: "100%" }}>
