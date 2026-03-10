@@ -3,7 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 
 export async function POST(request: Request) {
   try {
-    const { email, password } = await request.json();
+    const body = await request.json();
+    const { email, password } = body;
 
     if (!email || !password) {
       return NextResponse.json(
@@ -12,11 +13,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Use service key for admin operations
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
-      process.env.SUPABASE_SERVICE_KEY ?? ""
-    );
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_KEY;
+
+    if (!url || !key) {
+      return NextResponse.json(
+        { error: "Server config missing", hasUrl: !!url, hasKey: !!key },
+        { status: 500 }
+      );
+    }
+
+    const supabase = createClient(url, key);
 
     // Create user with auto-confirmed email
     const { data, error } = await supabase.auth.admin.createUser({
@@ -26,16 +33,20 @@ export async function POST(request: Request) {
     });
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return NextResponse.json(
+        { error: error.message, code: error.status },
+        { status: 400 }
+      );
     }
 
     return NextResponse.json({
       message: "Account created successfully. You can now sign in.",
       userId: data.user.id,
     });
-  } catch (err) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { error: "Failed to create account" },
+      { error: "Setup failed", detail: message },
       { status: 500 }
     );
   }
