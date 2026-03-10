@@ -341,19 +341,20 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Update flood water on zoom/pan
+      // Update flood water on zoom/pan (throttled to avoid excessive recalculation)
+      let waterTimer: ReturnType<typeof setTimeout> | null = null;
       const updateWater = () => {
-        try {
-          const d = devicesRef.current;
-          const c = floodCountsRef.current;
-          console.log("[WATER]", d.length, "devs", Object.keys(c).length, "counts");
-          const roads = calculateFloodWater(map, d, floodDepthsRef.current, c);
-          console.log("[WATER] features:", roads.length);
-          const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-          if (src) src.setData({ type: "FeatureCollection", features: roads });
-        } catch (e) {
-          console.log("[WATER] error:", e);
-        }
+        if (waterTimer) return;
+        waterTimer = setTimeout(() => {
+          waterTimer = null;
+          try {
+            const roads = calculateFloodWater(map, devicesRef.current, floodDepthsRef.current, floodCountsRef.current);
+            const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+            if (src) src.setData({ type: "FeatureCollection", features: roads });
+          } catch {
+            // queryRenderedFeatures can fail during transitions
+          }
+        }, 100);
       };
       map.on("moveend", updateWater);
       map.on("idle", updateWater);
