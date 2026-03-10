@@ -68,8 +68,7 @@ function calculateFloodWater(
   });
 
   // No flood data → no water
-  console.log("[FLOOD-CALC] scores:", sensors.map(s => ({ lat: s.lat.toFixed(4), score: s.score, elev: s.elev.toFixed(2) })).slice(0, 5));
-  if (sensors.every((s) => s.score === 0)) { console.log("[FLOOD-CALC] all scores zero, returning empty"); return []; }
+  if (sensors.every((s) => s.score === 0)) return [];
 
   const maxScore = Math.max(1, ...sensors.map((s) => s.score));
   const minElev = Math.min(...sensors.map((s) => s.elev));
@@ -87,8 +86,7 @@ function calculateFloodWater(
   const roadLayerIds = style.layers
     .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
     .map((l) => l.id);
-  console.log("[FLOOD-CALC] roadLayerIds:", roadLayerIds.length, "waterLine:", waterLine.toFixed(3), "minElev:", minElev.toFixed(3), "maxElev:", maxElev.toFixed(3));
-  if (roadLayerIds.length === 0) { console.log("[FLOOD-CALC] no road layers found"); return []; }
+  if (roadLayerIds.length === 0) return [];
 
   // Query ALL roads within the sensor cluster bounding box (+padding)
   let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
@@ -111,7 +109,6 @@ function calculateFloodWater(
 
   try {
     const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
-    console.log("[FLOOD-CALC] queried road features:", roadFeatures.length);
 
     for (const f of roadFeatures) {
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
@@ -346,21 +343,16 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
       // Update flood water on zoom/pan
       const updateWater = () => {
-        if (!map.isStyleLoaded()) return;
-        console.log("[FLOOD-DEBUG] moveend updateWater", {
-          devices: devicesRef.current.length,
-          countKeys: Object.keys(floodCountsRef.current).length,
-          depthKeys: Object.keys(floodDepthsRef.current).length,
-        });
-        const roads = calculateFloodWater(map, devicesRef.current, floodDepthsRef.current, floodCountsRef.current);
-        console.log("[FLOOD-DEBUG] moveend result:", roads.length);
-        const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-        if (src) src.setData({ type: "FeatureCollection", features: roads });
+        try {
+          const roads = calculateFloodWater(map, devicesRef.current, floodDepthsRef.current, floodCountsRef.current);
+          const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+          if (src) src.setData({ type: "FeatureCollection", features: roads });
+        } catch {
+          // queryRenderedFeatures can fail during transitions
+        }
       };
       map.on("moveend", updateWater);
-      map.on("sourcedata", (e) => {
-        if (e.sourceId === "composite" && e.isSourceLoaded) updateWater();
-      });
+      map.on("idle", updateWater);
 
       // Alert rings (larger semi-transparent circles for alerting sensors)
       map.addLayer({
@@ -544,20 +536,17 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alertFeatures });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Update smart flood water on streets (elevation-based simulation)
-    setTimeout(() => {
-      if (!map.isStyleLoaded()) { console.log("[FLOOD-DEBUG] style not loaded yet"); return; }
-      console.log("[FLOOD-DEBUG] calculateFloodWater called", {
-        deviceCount: devices.length,
-        depthKeys: Object.keys(floodDepths ?? {}),
-        countKeys: Object.keys(floodCounts ?? {}),
-        countSample: Object.entries(floodCounts ?? {}).slice(0, 3),
-      });
-      const roads = calculateFloodWater(map, devices, floodDepths ?? {}, floodCounts ?? {});
-      console.log("[FLOOD-DEBUG] result features:", roads.length);
-      const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
-    }, 300);
+    // Update flood water after map finishes rendering tiles
+    const updateFloodRoads = () => {
+      try {
+        const roads = calculateFloodWater(map, devices, floodDepths ?? {}, floodCounts ?? {});
+        const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+        if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+      } catch {
+        // can fail during transitions
+      }
+    };
+    map.once("idle", updateFloodRoads);
 
     // Fit bounds if we have devices
     if (devices.length > 0 && map.getZoom() === 14) {
