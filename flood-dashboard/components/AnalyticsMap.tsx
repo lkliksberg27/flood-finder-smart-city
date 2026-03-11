@@ -13,7 +13,59 @@ const STREET_CLASSES = new Set([
   "motorway", "motorway_link", "trunk", "trunk_link",
   "primary", "primary_link", "secondary", "secondary_link",
   "tertiary", "tertiary_link", "street", "street_limited",
+  "service", "pedestrian", "track",
 ]);
+
+function mergeRoadSegments(roads: CachedRoad[]): CachedRoad[] {
+  const cosLat = Math.cos(25.966 * Math.PI / 180);
+  const MERGE_THRESHOLD = 15;
+  const segments: number[][][] = [];
+  for (const r of roads) {
+    const coords =
+      r.geometry.type === "LineString" ? (r.geometry as GeoJSON.LineString).coordinates :
+      r.geometry.type === "MultiLineString" ? (r.geometry as GeoJSON.MultiLineString).coordinates[0] : null;
+    if (coords && coords.length >= 2) segments.push(coords);
+  }
+  const ptDist = (a: number[], b: number[]): number => {
+    const dx = (a[0] - b[0]) * 111320 * cosLat;
+    const dy = (a[1] - b[1]) * 111320;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+  const used = new Set<number>();
+  const merged: number[][][] = [];
+  for (let i = 0; i < segments.length; i++) {
+    if (used.has(i)) continue;
+    used.add(i);
+    let chain = [...segments[i]];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < segments.length; j++) {
+        if (used.has(j)) continue;
+        const seg = segments[j];
+        const chainEnd = chain[chain.length - 1];
+        const chainStart = chain[0];
+        if (ptDist(chainEnd, seg[0]) < MERGE_THRESHOLD) {
+          chain = chain.concat(seg.slice(1)); used.add(j); changed = true;
+        } else if (ptDist(chainEnd, seg[seg.length - 1]) < MERGE_THRESHOLD) {
+          chain = chain.concat([...seg].reverse().slice(1)); used.add(j); changed = true;
+        } else if (ptDist(chainStart, seg[seg.length - 1]) < MERGE_THRESHOLD) {
+          chain = seg.concat(chain.slice(1)); used.add(j); changed = true;
+        } else if (ptDist(chainStart, seg[0]) < MERGE_THRESHOLD) {
+          chain = [...seg].reverse().concat(chain.slice(1)); used.add(j); changed = true;
+        }
+      }
+    }
+    merged.push(chain);
+  }
+  return merged.map((coords) => {
+    const mid = Math.floor(coords.length / 2);
+    return {
+      midLat: coords[mid][1], midLng: coords[mid][0],
+      geometry: { type: "LineString" as const, coordinates: coords } as GeoJSON.Geometry,
+    };
+  });
+}
 
 function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad[] {
   const style = map.getStyle();
@@ -27,7 +79,7 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
     minLat = Math.min(minLat, d.lat); maxLat = Math.max(maxLat, d.lat);
     minLng = Math.min(minLng, d.lng); maxLng = Math.max(maxLng, d.lng);
   }
-  const pad = 0.002;
+  const pad = 0.003;
   const sw = map.project([minLng - pad, minLat - pad]);
   const ne = map.project([maxLng + pad, maxLat + pad]);
   const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
@@ -51,7 +103,7 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
       roads.push({ midLat: coords[mid][1], midLng: coords[mid][0], geometry: f.geometry });
     }
   } catch { /* tiles not ready */ }
-  return roads;
+  return mergeRoadSegments(roads);
 }
 
 /** Minimum distance (meters) from a point to any vertex of a LineString. */
@@ -141,7 +193,7 @@ function calculateAnalyticsFloodWater(
 
   for (const sensor of floodingSensors) {
     const cosLat = Math.cos(sensor.lat * Math.PI / 180);
-    const baseWalk = Math.min(40 + sensor.depth * 3, 150);
+    const baseWalk = Math.min(40 + sensor.depth * 3, 200);
 
     let bestRoad: CachedRoad | null = null;
     let bestDist = Infinity;
@@ -149,11 +201,11 @@ function calculateAnalyticsFloodWater(
       const dist = pointToLineDist(sensor, road.geometry, cosLat);
       if (dist < bestDist) { bestDist = dist; bestRoad = road; }
     }
-    if (!bestRoad || bestDist > 60) continue;
+    if (!bestRoad || bestDist > 80) continue;
 
     const coords =
-      bestRoad.geometry.type === "LineString" ? bestRoad.geometry.coordinates :
-      bestRoad.geometry.type === "MultiLineString" ? bestRoad.geometry.coordinates[0] : null;
+      bestRoad.geometry.type === "LineString" ? (bestRoad.geometry as GeoJSON.LineString).coordinates :
+      bestRoad.geometry.type === "MultiLineString" ? (bestRoad.geometry as GeoJSON.MultiLineString).coordinates[0] : null;
     if (!coords || coords.length < 2) continue;
 
     let nearIdx = 0, nearDist = Infinity;
