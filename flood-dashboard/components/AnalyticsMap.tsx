@@ -7,26 +7,23 @@ import type { Device, FloodEvent } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-/** Smart elevation-based flood water calculation for analytics map */
+/** Show flood water on streets near sensors with recorded flood events.
+ *  For analytics, uses maxDepth from historical events (not just active ones).
+ *  Water appears only near sensors that have had floods, deeper = more water. */
 function calculateAnalyticsFloodWater(
   map: mapboxgl.Map,
   devices: Device[],
   stats: Record<string, { count: number; totalDepth: number; maxDepth: number }>,
 ): GeoJSON.Feature[] {
-  const sensors = devices.map((d) => {
-    const streetElev = (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100;
-    const s = stats[d.device_id] ?? { count: 0, totalDepth: 0, maxDepth: 0 };
-    return { lat: d.lat, lng: d.lng, elev: streetElev, score: s.count * 3 + s.maxDepth * 0.5 };
-  });
+  const floodingSensors = devices
+    .filter((d) => (stats[d.device_id]?.count ?? 0) > 0)
+    .map((d) => {
+      const s = stats[d.device_id];
+      return { lat: d.lat, lng: d.lng, depth: s.maxDepth };
+    });
 
-  if (sensors.every((s) => s.score === 0)) return [];
-
-  const maxScore = Math.max(1, ...sensors.map((s) => s.score));
-  const minElev = Math.min(...sensors.map((s) => s.elev));
-  const maxElev = Math.max(...sensors.map((s) => s.elev));
-  const elevRange = maxElev - minElev || 1;
-  const avgSeverity = sensors.reduce((s, d) => s + d.score / maxScore, 0) / sensors.length;
-  const waterLine = minElev + (0.15 + avgSeverity * 0.5) * elevRange;
+  if (floodingSensors.length === 0) return [];
+  const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
 
   const style = map.getStyle();
   if (!style?.layers) return [];
@@ -36,13 +33,13 @@ function calculateAnalyticsFloodWater(
   if (roadLayerIds.length === 0) return [];
 
   let sMinLat = 90, sMaxLat = -90, sMinLng = 180, sMaxLng = -180;
-  for (const s of sensors) {
+  for (const s of floodingSensors) {
     if (s.lat < sMinLat) sMinLat = s.lat;
     if (s.lat > sMaxLat) sMaxLat = s.lat;
     if (s.lng < sMinLng) sMinLng = s.lng;
     if (s.lng > sMaxLng) sMaxLng = s.lng;
   }
-  const pad = 0.004;
+  const pad = 0.003;
   const sw = map.project([sMinLng - pad, sMinLat - pad]);
   const ne = map.project([sMaxLng + pad, sMaxLat + pad]);
   const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
@@ -52,6 +49,7 @@ function calculateAnalyticsFloodWater(
 
   const features: GeoJSON.Feature[] = [];
   const seen = new Set<string>();
+  const SPREAD_RADIUS = 250;
 
   try {
     const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
@@ -65,26 +63,25 @@ function calculateAnalyticsFloodWater(
       if (!coords || coords.length === 0) continue;
       const mid = Math.floor(coords.length / 2);
       const cLng = coords[mid][0], cLat = coords[mid][1];
-
-      let wElev = 0, wScore = 0, wTotal = 0;
       const cosLat = Math.cos(cLat * Math.PI / 180);
-      for (const s of sensors) {
+
+      let wDepth = 0, wTotal = 0, closestDist = Infinity;
+      for (const s of floodingSensors) {
         const dx = (s.lng - cLng) * 111320 * cosLat;
         const dy = (s.lat - cLat) * 111320;
-        const w = 1 / (Math.max(Math.sqrt(dx * dx + dy * dy), 5) ** 2);
-        wElev += s.elev * w;
-        wScore += (s.score / maxScore) * w;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > SPREAD_RADIUS) continue;
+        if (dist < closestDist) closestDist = dist;
+        const w = 1 / (Math.max(dist, 10) ** 2);
+        wDepth += s.depth * w;
         wTotal += w;
       }
-      if (wTotal === 0) continue;
+      if (wTotal === 0 || closestDist > SPREAD_RADIUS) continue;
 
-      const roadElev = wElev / wTotal;
-      const floodScore = wScore / wTotal;
-      const waterDepth = waterLine - roadElev;
-      if (waterDepth <= 0 || floodScore < 0.02) continue;
-
-      const intensity = Math.min(1, Math.min(1, waterDepth / 0.5) * 0.55 + floodScore * 0.45);
-      if (intensity < 0.05) continue;
+      const interpDepth = wDepth / wTotal;
+      const distFade = 1 - (closestDist / SPREAD_RADIUS) ** 0.7;
+      const intensity = Math.min(1, (interpDepth / maxDepth) * distFade);
+      if (intensity < 0.08) continue;
 
       features.push({ type: "Feature", geometry: f.geometry, properties: { intensity } });
     }
@@ -142,38 +139,22 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Road water — outer glow
+      // Solid flood water on streets
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1565c0", 0.5, "#1976d2", 1, "#1e88e5"],
+            0.1, "#1976d2", 0.4, "#2196f3", 0.7, "#42a5f5", 1, "#64b5f6"],
           "line-width": ["interpolate", ["linear"], ["zoom"],
-            12, 6, 14, 16, 16, 32, 18, 56],
+            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 6],
+            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14],
+            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 6, 0.5, 14, 1, 24],
+            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 10, 0.5, 22, 1, 40]],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.05, 0.15, 0.3, 0.35, 0.7, 0.5, 1, 0.65],
-          "line-blur": ["interpolate", ["linear"], ["zoom"],
-            12, 3, 14, 5, 16, 8, 18, 14],
-        },
-        layout: { "line-cap": "round", "line-join": "round" },
-      });
-
-      // Road water — bright center
-      map.addLayer({
-        id: "flood-road-water-bright",
-        type: "line",
-        source: "flood-roads",
-        paint: {
-          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#42a5f5", 0.5, "#64b5f6", 1, "#90caf9"],
-          "line-width": ["interpolate", ["linear"], ["zoom"],
-            12, 2, 14, 7, 16, 16, 18, 30],
-          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.05, 0.1, 0.3, 0.25, 0.7, 0.4, 1, 0.55],
-          "line-blur": ["interpolate", ["linear"], ["zoom"],
-            12, 1, 14, 2, 16, 4, 18, 7],
+            0.08, 0.45, 0.3, 0.6, 0.6, 0.75, 1, 0.85],
+          "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });

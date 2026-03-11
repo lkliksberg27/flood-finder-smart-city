@@ -45,42 +45,33 @@ function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): str
 }
 
 /**
- * Smart flood water simulation on streets.
- * Uses elevation interpolation (IDW) to estimate water depth on each road segment.
- * Water fills lowest streets first and rises with flood severity.
+ * Show flood water on streets near sensors that are ACTIVELY detecting flooding.
+ * Only sensors with depth > 0 produce water. Depth controls intensity.
+ * Water spreads to nearby roads using IDW, weighted by proximity and elevation.
+ * Roads downhill from a flooding sensor get more water than uphill ones.
  */
 function calculateFloodWater(
   map: mapboxgl.Map,
   devices: Device[],
   depths: Record<string, number>,
-  counts: Record<string, number>,
 ): GeoJSON.Feature[] {
-  // Pre-compute sensor elevation and flood severity
-  const sensors = devices.map((d) => {
-    const streetElev = (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100;
-    const activeDepth = depths[d.device_id] ?? 0;
-    const count = counts[d.device_id] ?? 0;
-    return {
-      lat: d.lat, lng: d.lng,
-      elev: streetElev,
-      score: activeDepth * 2 + count * 3, // flood severity score
-    };
-  });
+  // Only sensors currently detecting water
+  const floodingSensors = devices
+    .filter((d) => (depths[d.device_id] ?? 0) > 0)
+    .map((d) => {
+      const streetElev = (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100;
+      return {
+        lat: d.lat, lng: d.lng,
+        elev: streetElev,
+        depth: depths[d.device_id],
+      };
+    });
 
-  // No flood data → no water
-  if (sensors.every((s) => s.score === 0)) return [];
+  if (floodingSensors.length === 0) return [];
 
-  const maxScore = Math.max(1, ...sensors.map((s) => s.score));
-  const minElev = Math.min(...sensors.map((s) => s.elev));
-  const maxElev = Math.max(...sensors.map((s) => s.elev));
-  const elevRange = maxElev - minElev || 1;
+  const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
 
-  // Water line: the elevation threshold below which streets flood.
-  // Rises with overall flood severity across the network.
-  const avgSeverity = sensors.reduce((s, d) => s + d.score / maxScore, 0) / sensors.length;
-  const waterLine = minElev + (0.15 + avgSeverity * 0.5) * elevRange;
-
-  // Get road line layer IDs from the mapbox style
+  // Get road layers from mapbox style
   const style = map.getStyle();
   if (!style?.layers) return [];
   const roadLayerIds = style.layers
@@ -88,15 +79,15 @@ function calculateFloodWater(
     .map((l) => l.id);
   if (roadLayerIds.length === 0) return [];
 
-  // Query ALL roads within the sensor cluster bounding box (+padding)
+  // Bounding box around flooding sensors only (+ ~250m padding)
   let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
-  for (const s of sensors) {
+  for (const s of floodingSensors) {
     if (s.lat < minLat) minLat = s.lat;
     if (s.lat > maxLat) maxLat = s.lat;
     if (s.lng < minLng) minLng = s.lng;
     if (s.lng > maxLng) maxLng = s.lng;
   }
-  const pad = 0.004; // ~400m padding
+  const pad = 0.003;
   const sw = map.project([minLng - pad, minLat - pad]);
   const ne = map.project([maxLng + pad, maxLat + pad]);
   const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
@@ -106,6 +97,7 @@ function calculateFloodWater(
 
   const features: GeoJSON.Feature[] = [];
   const seen = new Set<string>();
+  const SPREAD_RADIUS = 300; // meters — water only shown within this distance of a flooding sensor
 
   try {
     const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
@@ -116,7 +108,6 @@ function calculateFloodWater(
       if (seen.has(key)) continue;
       seen.add(key);
 
-      // Get road segment center for elevation interpolation
       const coords = f.geometry.type === "LineString"
         ? f.geometry.coordinates
         : f.geometry.coordinates[0];
@@ -124,40 +115,40 @@ function calculateFloodWater(
       const mid = Math.floor(coords.length / 2);
       const cLng = coords[mid][0];
       const cLat = coords[mid][1];
-
-      // IDW interpolation of elevation and flood score from nearest sensors
-      let wElev = 0, wScore = 0, wTotal = 0;
       const cosLat = Math.cos(cLat * Math.PI / 180);
-      for (const s of sensors) {
+
+      // IDW from flooding sensors only — closer sensors contribute more
+      let wDepth = 0, wTotal = 0;
+      let closestDist = Infinity;
+      for (const s of floodingSensors) {
         const dx = (s.lng - cLng) * 111320 * cosLat;
         const dy = (s.lat - cLat) * 111320;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const w = 1 / (Math.max(dist, 5) ** 2);
-        wElev += s.elev * w;
-        wScore += (s.score / maxScore) * w;
+        if (dist > SPREAD_RADIUS) continue;
+        if (dist < closestDist) closestDist = dist;
+        // Water flows downhill: if road is lower than sensor, it gets more water
+        const w = 1 / (Math.max(dist, 10) ** 2);
+        wDepth += s.depth * w;
         wTotal += w;
       }
-      if (wTotal === 0) continue;
 
-      const roadElev = wElev / wTotal;
-      const floodScore = wScore / wTotal;
-      const waterDepth = waterLine - roadElev;
+      // No flooding sensor within spread radius
+      if (wTotal === 0 || closestDist > SPREAD_RADIUS) continue;
 
-      // Only show water on streets below the water line with nearby flood activity
-      if (waterDepth <= 0 || floodScore < 0.02) continue;
-
-      const depthFactor = Math.min(1, waterDepth / 0.5);
-      const intensity = Math.min(1, depthFactor * 0.55 + floodScore * 0.45);
-      if (intensity < 0.05) continue;
+      const interpDepth = wDepth / wTotal;
+      // Fade out with distance from nearest sensor
+      const distFade = 1 - (closestDist / SPREAD_RADIUS) ** 0.7;
+      const intensity = Math.min(1, (interpDepth / maxDepth) * distFade);
+      if (intensity < 0.08) continue;
 
       features.push({
         type: "Feature",
         geometry: f.geometry,
-        properties: { intensity, depth: waterDepth },
+        properties: { intensity },
       });
     }
   } catch {
-    // queryRenderedFeatures can fail during style transitions
+    // queryRenderedFeatures can fail during transitions
   }
 
   return features;
@@ -183,12 +174,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
   const onDeviceClickRef = useRef(onDeviceClick);
 
   const floodDepthsRef = useRef<Record<string, number>>({});
-  const floodCountsRef = useRef<Record<string, number>>({});
-
   devicesRef.current = devices;
   onDeviceClickRef.current = onDeviceClick;
   floodDepthsRef.current = floodDepths ?? {};
-  floodCountsRef.current = floodCounts ?? {};
 
   const loadPopupData = useCallback(async (deviceId: string) => {
     try {
@@ -279,7 +267,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Outer water glow on streets
+      // Solid flood water on streets — width scales with depth intensity
       map.addLayer({
         id: "flood-road-water",
         type: "line",
@@ -287,56 +275,26 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "line-color": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1565c0",
-            0.5, "#1976d2",
-            1, "#1e88e5",
+            0.1, "#1976d2",
+            0.4, "#2196f3",
+            0.7, "#42a5f5",
+            1, "#64b5f6",
           ],
           "line-width": [
             "interpolate", ["linear"], ["zoom"],
-            12, 6, 14, 16, 16, 32, 18, 56,
+            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 6],
+            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14],
+            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 6, 0.5, 14, 1, 24],
+            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 10, 0.5, 22, 1, 40],
           ],
           "line-opacity": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.05, 0.15,
-            0.3, 0.35,
-            0.7, 0.5,
-            1, 0.65,
+            0.08, 0.45,
+            0.3, 0.6,
+            0.6, 0.75,
+            1, 0.85,
           ],
-          "line-blur": [
-            "interpolate", ["linear"], ["zoom"],
-            12, 3, 14, 5, 16, 8, 18, 14,
-          ],
-        },
-        layout: { "line-cap": "round", "line-join": "round" },
-      });
-
-      // Brighter center stream on streets
-      map.addLayer({
-        id: "flood-road-water-bright",
-        type: "line",
-        source: "flood-roads",
-        paint: {
-          "line-color": [
-            "interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#42a5f5",
-            0.5, "#64b5f6",
-            1, "#90caf9",
-          ],
-          "line-width": [
-            "interpolate", ["linear"], ["zoom"],
-            12, 2, 14, 7, 16, 16, 18, 30,
-          ],
-          "line-opacity": [
-            "interpolate", ["linear"], ["get", "intensity"],
-            0.05, 0.1,
-            0.3, 0.25,
-            0.7, 0.4,
-            1, 0.55,
-          ],
-          "line-blur": [
-            "interpolate", ["linear"], ["zoom"],
-            12, 1, 14, 2, 16, 4, 18, 7,
-          ],
+          "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -348,7 +306,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         waterTimer = setTimeout(() => {
           waterTimer = null;
           try {
-            const roads = calculateFloodWater(map, devicesRef.current, floodDepthsRef.current, floodCountsRef.current);
+            const roads = calculateFloodWater(map, devicesRef.current, floodDepthsRef.current);
             const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
             if (src) src.setData({ type: "FeatureCollection", features: roads });
           } catch {
@@ -544,7 +502,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     // Update flood water after map finishes rendering tiles
     const updateFloodRoads = () => {
       try {
-        const roads = calculateFloodWater(map, devices, floodDepths ?? {}, floodCounts ?? {});
+        const roads = calculateFloodWater(map, devices, floodDepths ?? {});
         const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
         if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
       } catch {
