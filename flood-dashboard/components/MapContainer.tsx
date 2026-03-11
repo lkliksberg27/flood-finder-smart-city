@@ -79,11 +79,11 @@ function calculateFloodWater(
     .map((l) => l.id);
   if (roadLayerIds.length === 0) return [];
 
-  // Road classes that represent actual streets (exclude service, path, track, pedestrian)
+  // Road classes that represent actual streets (exclude service, path, track, pedestrian, street_limited)
   const STREET_CLASSES = new Set([
     "motorway", "motorway_link", "trunk", "trunk_link",
     "primary", "primary_link", "secondary", "secondary_link",
-    "tertiary", "tertiary_link", "street", "street_limited",
+    "tertiary", "tertiary_link", "street",
   ]);
 
   // Bounding box around flooding sensors only (+ ~250m padding)
@@ -111,9 +111,9 @@ function calculateFloodWater(
 
     for (const f of roadFeatures) {
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
-      // Skip non-street roads (service, path, track, pedestrian, driveway)
+      // Only include actual named street classes
       const roadClass = (f.properties?.class ?? "") as string;
-      if (roadClass && !STREET_CLASSES.has(roadClass)) continue;
+      if (!STREET_CLASSES.has(roadClass)) continue;
       const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
       if (seen.has(key)) continue;
       seen.add(key);
