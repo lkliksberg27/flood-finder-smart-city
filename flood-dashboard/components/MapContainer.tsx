@@ -10,9 +10,9 @@ import { getSupabase } from "@/lib/supabase";
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
 const STATUS_COLORS: Record<string, string> = {
-  online: "#34d399",
-  alert: "#f87171",
-  offline: "#6b7280",
+  online: "#059669",
+  alert: "#dc2626",
+  offline: "#4b5563",
 };
 
 function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): string {
@@ -45,13 +45,6 @@ function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): str
 }
 
 type CachedRoad = { midLat: number; midLng: number; geometry: GeoJSON.Geometry };
-
-const STREET_CLASSES = new Set([
-  "motorway", "motorway_link", "trunk", "trunk_link",
-  "primary", "primary_link", "secondary", "secondary_link",
-  "tertiary", "tertiary_link", "street", "street_limited",
-  "service", "pedestrian", "track",
-]);
 
 /** Merge road features that share endpoints into longer polylines. */
 function mergeRoadSegments(roads: CachedRoad[]): CachedRoad[] {
@@ -149,8 +142,7 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
     const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
     for (const f of features) {
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
-      const cls = (f.properties?.class ?? "") as string;
-      if (!STREET_CLASSES.has(cls)) continue;
+      // Accept all road features — no class filter
       const key = JSON.stringify(f.geometry).slice(0, 120);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -499,26 +491,26 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "line-color": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1976d2",
-            0.4, "#2196f3",
-            0.7, "#42a5f5",
-            1, "#64b5f6",
+            0.1, "#1e5a8a",
+            0.4, "#2874a6",
+            0.7, "#3498b8",
+            1, "#4aa3c2",
           ],
           "line-width": [
             "interpolate", ["linear"], ["zoom"],
-            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1.5, 0.5, 3, 1, 5],
-            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 3, 0.5, 6, 1, 10],
-            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14],
-            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 6, 0.5, 12, 1, 20],
+            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1, 0.5, 2, 1, 4],
+            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 7],
+            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 3, 0.5, 6, 1, 10],
+            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14],
           ],
           "line-opacity": [
             "interpolate", ["linear"], ["get", "intensity"],
-            0.08, 0.45,
-            0.3, 0.6,
-            0.6, 0.75,
-            1, 0.85,
+            0.08, 0.35,
+            0.3, 0.5,
+            0.6, 0.6,
+            1, 0.7,
           ],
-          "line-blur": 0,
+          "line-blur": 1,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -529,9 +521,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         type: "circle",
         source: "device-alerts",
         paint: {
-          "circle-radius": 22,
-          "circle-color": "#f87171",
-          "circle-opacity": 0.15,
+          "circle-radius": 16,
+          "circle-color": "#b91c1c",
+          "circle-opacity": 0.1,
         },
       });
 
@@ -542,20 +534,20 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         source: "device-dots",
         paint: {
           "circle-radius": ["case",
-            ["==", ["get", "highlighted"], true], 12,
-            ["==", ["get", "status"], "alert"], 10,
-            7
+            ["==", ["get", "highlighted"], true], 9,
+            ["==", ["get", "status"], "alert"], 7,
+            5
           ],
           "circle-color": ["get", "color"],
           "circle-stroke-width": ["case",
-            ["==", ["get", "highlighted"], true], 3,
+            ["==", ["get", "highlighted"], true], 2,
             1
           ],
           "circle-stroke-color": ["case",
-            ["==", ["get", "highlighted"], true], "#ffffff",
+            ["==", ["get", "highlighted"], true], "#d1d5db",
             ["get", "color"]
           ],
-          "circle-opacity": 0.85,
+          "circle-opacity": 0.8,
         },
       });
 
@@ -572,7 +564,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         const lastSeenText = props.last_seen_text;
         const battV = props.battery_v ?? 0;
         const battPct = Math.max(0, Math.min(100, ((battV - 2.8) / 1.4) * 100));
-        const battColor = battPct > 60 ? "#34d399" : battPct > 25 ? "#fbbf24" : "#f87171";
+        const battColor = battPct > 60 ? "#059669" : battPct > 25 ? "#d97706" : "#dc2626";
 
         // Street elevation = sensor altitude - distance to ground
         const altBaro = parseFloat(props.altitude_baro) || 0;
@@ -807,19 +799,19 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         border: "1px solid #1f2937",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#34d399", display: "inline-block" }} />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#059669", display: "inline-block" }} />
           <span>Online</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#f87171", display: "inline-block" }} />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", display: "inline-block" }} />
           <span>Flood Alert</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#6b7280", display: "inline-block" }} />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4b5563", display: "inline-block" }} />
           <span>Offline</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 10, height: 4, borderRadius: 2, background: "rgba(66,165,245,0.6)", display: "inline-block" }} />
+          <span style={{ width: 10, height: 3, borderRadius: 2, background: "rgba(52,152,184,0.5)", display: "inline-block" }} />
           <span>Flooded Streets</span>
         </div>
       </div>
