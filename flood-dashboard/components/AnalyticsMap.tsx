@@ -36,7 +36,7 @@ function calculateAnalyticsFloodWater(
   const STREET_CLASSES = new Set([
     "motorway", "motorway_link", "trunk", "trunk_link",
     "primary", "primary_link", "secondary", "secondary_link",
-    "tertiary", "tertiary_link", "street", "street_limited",
+    "tertiary", "tertiary_link", "street",
   ]);
 
   let sMinLat = 90, sMaxLat = -90, sMinLng = 180, sMaxLng = -180;
@@ -63,7 +63,7 @@ function calculateAnalyticsFloodWater(
     for (const f of roadFeatures) {
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
       const roadClass = (f.properties?.class ?? "") as string;
-      if (roadClass && !STREET_CLASSES.has(roadClass)) continue;
+      if (!STREET_CLASSES.has(roadClass)) continue;
       const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
       if (seen.has(key)) continue;
       seen.add(key);
