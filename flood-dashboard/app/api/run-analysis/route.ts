@@ -330,7 +330,7 @@ export async function POST(request: Request) {
       max_tokens: neighborhoodFilter ? 1500 : 2048,
       messages: [{
         role: "user",
-        content: `You are a senior urban flood infrastructure engineer consulting for the City of Aventura, Florida (Miami-Dade County).
+        content: `You are a senior urban flood infrastructure engineer consulting for the Town of Golden Beach, Florida (Miami-Dade County).
 ${neighborhoodFilter
   ? `You are analyzing 30 days of data SPECIFICALLY for the ${neighborhoodFilter} neighborhood — ${allDevices.length} sensors in this area.
 Focus all recommendations on this neighborhood's specific conditions, drainage patterns, and infrastructure needs.`
@@ -342,10 +342,10 @@ NOAA weather and tide data is automatically correlated with each flood event.
 REFERENCE: ENGINEERING STANDARDS & REGIONAL CONTEXT
 Use these real-world benchmarks to ground your recommendations.
 ═══════════════════════════════════════════════════
-AVENTURA CONTEXT:
-- Storm sewers discharge to Intracoastal Waterway / Biscayne Bay (tidal)
-- Most of Aventura is FEMA Special Flood Hazard Area (AE Zone)
-- CRS Class 7 rating — ~$600K/year in community flood insurance discounts
+GOLDEN BEACH CONTEXT:
+- Barrier island community between Atlantic Ocean and Intracoastal Waterway (tidal)
+- Most of Golden Beach is FEMA Special Flood Hazard Area (AE/VE Zone)
+- Residential community vulnerable to storm surge, king tides, and sea-level rise
 - Poorly to moderately drained soils, heavily modified by development
 - SE Florida sea level rise projections: +10-17in by 2040, +17-31in by 2060 (SE FL Climate Compact)
 - South Florida annual rainfall: 52-53in, ~75% in wet season (June-October)
@@ -419,7 +419,7 @@ Total compound events: ${events.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tid
 ═══════════════════════════════════════════════════
 
 ANALYSIS INSTRUCTIONS:
-You must produce actionable infrastructure recommendations that a city engineer could present to the Aventura City Commission. Each recommendation must:
+You must produce actionable infrastructure recommendations that a city engineer could present to the Golden Beach Town Commission. Each recommendation must:
 
 1. IDENTIFY the specific problem using data evidence (cite sensor IDs, depths, frequencies, elevations)
 2. EXPLAIN the root cause by cross-referencing multiple data sources:
@@ -442,7 +442,7 @@ You must produce actionable infrastructure recommendations that a city engineer 
 
 Return a JSON object (no markdown fences, raw JSON only):
 {
-  "summary": "2-3 sentence executive summary of the overall flood situation, referencing Aventura's specific risk context",
+  "summary": "2-3 sentence executive summary of the overall flood situation, referencing Golden Beach's specific risk context",
   "recommendations": [
     {
       "priority": "high" | "medium" | "low",

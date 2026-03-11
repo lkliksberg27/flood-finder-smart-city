@@ -2,47 +2,49 @@ import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 
 /**
- * Dense sensor placement along real Aventura streets.
- * Sensors are positioned at actual intersections for realistic flood mapping.
- * Elevation gradient: lower near Biscayne Blvd (east), higher inland (west).
- * Southern sensors are lower than northern ones (natural drainage toward coast).
+ * Sensor placement along residential Golden Beach streets.
+ * Sensors at real intersections along A1A, cross streets, and Ocean Dr.
+ * Elevation: lower along A1A (Intracoastal side), higher near beach (east).
+ * Southern sensors are lower than northern (natural coastal gradient).
  */
 const SENSOR_GRID = [
-  // ── Row 1: NE 199th St (northernmost) ──
-  { id: "FF-001", name: "NE 199th & Biscayne Blvd",  lat: 25.95965, lng: -80.14250, altBaro: 1.58, hood: "Biscayne Corridor" },
-  { id: "FF-002", name: "NE 199th & NE 29th Ave",    lat: 25.95945, lng: -80.13680, altBaro: 1.82, hood: "Central Aventura" },
-  { id: "FF-003", name: "NE 199th & NE 30th Ave",    lat: 25.95930, lng: -80.13200, altBaro: 2.05, hood: "West Aventura" },
+  // ── Row 1: NE 209th St (northernmost) ──
+  { id: "FF-001", name: "A1A & NE 209th St",        lat: 25.97380, lng: -80.12220, altBaro: 2.15, hood: "North Golden Beach" },
+  { id: "FF-002", name: "Ocean Dr & NE 209th St",   lat: 25.97380, lng: -80.11950, altBaro: 2.40, hood: "North Golden Beach" },
 
-  // ── Row 2: NE 197th St ──
-  { id: "FF-004", name: "NE 197th & Biscayne Blvd",  lat: 25.95750, lng: -80.14220, altBaro: 1.32, hood: "Biscayne Corridor" },
-  { id: "FF-005", name: "NE 197th & NE 29th Ct",     lat: 25.95730, lng: -80.13650, altBaro: 1.55, hood: "Central Aventura" },
+  // ── Row 2: NE 206th St ──
+  { id: "FF-003", name: "A1A & NE 206th St",        lat: 25.97150, lng: -80.12200, altBaro: 1.95, hood: "North Golden Beach" },
+  { id: "FF-004", name: "Terrace Dr & NE 206th St", lat: 25.97150, lng: -80.12050, altBaro: 2.10, hood: "North Golden Beach" },
 
-  // ── Row 3: W Country Club Dr / NE 195th St ──
-  { id: "FF-006", name: "Country Club & Biscayne",    lat: 25.95545, lng: -80.14180, altBaro: 0.88, hood: "Biscayne Corridor" },
-  { id: "FF-007", name: "Country Club & NE 29th Ave", lat: 25.95530, lng: -80.13620, altBaro: 1.18, hood: "Central Aventura" },
-  { id: "FF-008", name: "Country Club & NE 30th Ave", lat: 25.95510, lng: -80.13150, altBaro: 1.68, hood: "West Aventura" },
+  // ── Row 3: NE 203rd St ──
+  { id: "FF-005", name: "A1A & NE 203rd St",        lat: 25.96920, lng: -80.12180, altBaro: 1.75, hood: "Central Golden Beach" },
+  { id: "FF-006", name: "Ocean Dr & NE 203rd St",   lat: 25.96920, lng: -80.11920, altBaro: 2.05, hood: "Central Golden Beach" },
 
-  // ── Row 4: NE 193rd St ──
-  { id: "FF-009", name: "NE 193rd & Biscayne Blvd",  lat: 25.95340, lng: -80.14160, altBaro: 0.72, hood: "Biscayne Corridor" },
-  { id: "FF-010", name: "NE 193rd & NE 29th Ave",    lat: 25.95320, lng: -80.13580, altBaro: 1.08, hood: "Central Aventura" },
-  { id: "FF-011", name: "NE 193rd & NE 30th Ave",    lat: 25.95300, lng: -80.13120, altBaro: 1.42, hood: "West Aventura" },
+  // ── Row 4: Golden Beach Dr (main E-W road) ──
+  { id: "FF-007", name: "A1A & Golden Beach Dr",        lat: 25.96750, lng: -80.12160, altBaro: 1.50, hood: "Central Golden Beach" },
+  { id: "FF-008", name: "Terrace Dr & Golden Beach Dr", lat: 25.96750, lng: -80.12020, altBaro: 1.72, hood: "Central Golden Beach" },
+  { id: "FF-009", name: "Ocean Dr & Golden Beach Dr",   lat: 25.96750, lng: -80.11900, altBaro: 1.90, hood: "Central Golden Beach" },
 
-  // ── Row 5: NE 191st St ──
-  { id: "FF-012", name: "NE 191st & Biscayne Blvd",  lat: 25.95160, lng: -80.14130, altBaro: 0.52, hood: "Biscayne Corridor" },
-  { id: "FF-013", name: "NE 191st & NE 29th Pl",     lat: 25.95145, lng: -80.13600, altBaro: 0.82, hood: "Central Aventura" },
-  { id: "FF-014", name: "NE 191st & NE 30th Ave",    lat: 25.95125, lng: -80.13180, altBaro: 1.28, hood: "West Aventura" },
+  // ── Row 5: NE 199th St ──
+  { id: "FF-010", name: "A1A & NE 199th St",        lat: 25.96550, lng: -80.12140, altBaro: 1.30, hood: "South Golden Beach" },
+  { id: "FF-011", name: "Terrace Dr & NE 199th St", lat: 25.96550, lng: -80.12000, altBaro: 1.55, hood: "South Golden Beach" },
 
-  // ── Row 6: NE 190th St ──
-  { id: "FF-015", name: "NE 190th & Biscayne Blvd",  lat: 25.95060, lng: -80.14100, altBaro: 0.38, hood: "Biscayne Corridor" },
-  { id: "FF-016", name: "NE 190th & NE 29th Ave",    lat: 25.95040, lng: -80.13560, altBaro: 0.68, hood: "Central Aventura" },
+  // ── Row 6: NE 197th St ──
+  { id: "FF-012", name: "A1A & NE 197th St",        lat: 25.96380, lng: -80.12120, altBaro: 1.05, hood: "South Golden Beach" },
+  { id: "FF-013", name: "Ocean Dr & NE 197th St",   lat: 25.96380, lng: -80.11880, altBaro: 1.40, hood: "South Golden Beach" },
 
-  // ── Row 7: NE 188th St ──
-  { id: "FF-017", name: "NE 188th & Biscayne Blvd",  lat: 25.94860, lng: -80.14080, altBaro: 0.30, hood: "Biscayne Corridor" },
-  { id: "FF-018", name: "NE 188th & NE 29th Ave",    lat: 25.94840, lng: -80.13520, altBaro: 0.58, hood: "Central Aventura" },
-  { id: "FF-019", name: "NE 188th & NE 30th Ave",    lat: 25.94820, lng: -80.13100, altBaro: 1.12, hood: "West Aventura" },
+  // ── Row 7: NE 195th St ──
+  { id: "FF-014", name: "A1A & NE 195th St",        lat: 25.96220, lng: -80.12100, altBaro: 0.80, hood: "South Golden Beach" },
+  { id: "FF-015", name: "Terrace Dr & NE 195th St", lat: 25.96220, lng: -80.11980, altBaro: 1.10, hood: "South Golden Beach" },
+  { id: "FF-016", name: "Ocean Dr & NE 195th St",   lat: 25.96220, lng: -80.11870, altBaro: 1.30, hood: "South Golden Beach" },
 
-  // ── Row 8: NE 187th Ter (southernmost) ──
-  { id: "FF-020", name: "NE 187th & Biscayne Blvd",  lat: 25.94760, lng: -80.14060, altBaro: 0.22, hood: "Biscayne Corridor" },
+  // ── Row 8: NE 193rd St (southernmost) ──
+  { id: "FF-017", name: "A1A & NE 193rd St",        lat: 25.96050, lng: -80.12080, altBaro: 0.55, hood: "South Golden Beach" },
+  { id: "FF-018", name: "Terrace Dr & NE 193rd St", lat: 25.96050, lng: -80.11960, altBaro: 0.85, hood: "South Golden Beach" },
+
+  // ── Extra sensors ──
+  { id: "FF-019", name: "A1A & NE 201st St",  lat: 25.96730, lng: -80.12170, altBaro: 1.62, hood: "Central Golden Beach" },
+  { id: "FF-020", name: "A1A & NE 192nd St",  lat: 25.95980, lng: -80.12070, altBaro: 0.40, hood: "South Golden Beach" },
 ];
 
 function randomBetween(min: number, max: number) {
@@ -57,11 +59,9 @@ export async function POST() {
   try {
     const supabase = createServiceClient();
 
-    // ── 1. Seed 20 devices at exact street intersections ──
+    // ── 1. Seed 20 devices at residential intersections ──
     const devices = SENSOR_GRID.map((s, i) => {
       const baselineCm = 90 + Math.floor(Math.random() * 6);
-      // Street elevation = altBaro - baseline/100
-      // Low-elev sensors near Biscayne Blvd are most flood-prone
       return {
         device_id: s.id,
         name: s.name,
@@ -70,7 +70,7 @@ export async function POST() {
         altitude_baro: s.altBaro,
         mailbox_height_cm: 95,
         baseline_distance_cm: baselineCm,
-        status: s.altBaro < 0.5 ? "alert" : i < 19 ? "online" : "offline" as const,
+        status: s.altBaro < 0.6 ? "alert" : i < 19 ? "online" : "offline" as const,
         battery_v: parseFloat(randomBetween(3.0, 4.2).toFixed(2)),
         last_seen: i < 19
           ? new Date(Date.now() - Math.random() * 600000).toISOString()
@@ -85,10 +85,9 @@ export async function POST() {
     }
 
     // ── 2. Seed flood events — biased toward low-elevation sensors ──
-    // Includes 4-6 ACTIVE floods (no ended_at) on the lowest sensors
     const floodEvents = [];
 
-    // Active floods on lowest-elevation sensors (Biscayne Corridor)
+    // Active floods on lowest-elevation sensors
     const lowestSensors = [...devices]
       .sort((a, b) => (a.altitude_baro - a.baseline_distance_cm / 100) - (b.altitude_baro - b.baseline_distance_cm / 100))
       .slice(0, 6);
@@ -160,7 +159,6 @@ export async function POST() {
       const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
       for (let h = 0; h < 24; h += 2) {
         const recordedAt = new Date(Date.now() - h * 3600000);
-        // Low-elevation sensors more likely to show water
         const floodChance = Math.max(0.02, 0.15 - streetElev * 0.1);
         const isFlooding = Math.random() < floodChance;
         const distanceCm = isFlooding

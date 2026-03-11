@@ -599,7 +599,7 @@ function OverviewContent() {
             {weather && (
               <div className="bg-bg-card border border-border-card rounded-lg p-3">
                 <p className="text-xs text-text-secondary mb-2">
-                  Current Weather (Aventura)
+                  Current Weather (Golden Beach)
                 </p>
                 <div className="flex items-center gap-4 text-xs">
                   {weather.temperature != null && (
