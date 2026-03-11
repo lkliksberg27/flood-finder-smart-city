@@ -147,11 +147,9 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
 
   try {
     const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
-    const classCounts: Record<string, number> = {};
     for (const f of features) {
-      const cls = (f.properties?.class ?? "unknown") as string;
-      classCounts[cls] = (classCounts[cls] ?? 0) + 1;
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+      const cls = (f.properties?.class ?? "") as string;
       if (!STREET_CLASSES.has(cls)) continue;
       const key = JSON.stringify(f.geometry).slice(0, 120);
       if (seen.has(key)) continue;
@@ -161,13 +159,10 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
       const mid = Math.floor(coords.length / 2);
       roads.push({ midLat: coords[mid][1], midLng: coords[mid][0], geometry: f.geometry });
     }
-    console.log(`[ROADS] classes found:`, classCounts, `features: ${features.length}, kept: ${roads.length}`);
   } catch { /* tiles not ready */ }
 
   // Merge tile fragments into longer polylines (e.g. all of Ocean Blvd)
-  const merged = mergeRoadSegments(roads);
-  console.log(`[ROADS] merged ${roads.length} segments → ${merged.length} polylines`);
-  return merged;
+  return mergeRoadSegments(roads);
 }
 
 /** Minimum distance (meters) from a point to any vertex of a LineString. */
@@ -286,7 +281,6 @@ function calculateFloodWater(
       depth: depths[d.device_id],
     }));
   if (floodingSensors.length === 0) return [];
-  console.log(`[FLOOD] ${floodingSensors.length} flooding sensors, ${cachedRoads.length} merged roads`);
 
   const allSensors = devices.map((d) => ({
     lat: d.lat, lng: d.lng,
@@ -323,7 +317,6 @@ function calculateFloodWater(
     }
 
     if (!coords || coords.length < 2) {
-      console.log(`[FLOOD] ${sensor.id}: no road found (mapbox best=${bestDist.toFixed(0)}m, no synthetic)`);
       continue;
     }
 
@@ -371,7 +364,6 @@ function calculateFloodWater(
       }
     }
 
-    console.log(`[FLOOD] ${sensor.id}: ${source} segment=${segment.length}, walk=${baseWalk.toFixed(0)}m`);
     if (segment.length < 2) continue;
 
     const intensity = Math.min(1, sensor.depth / maxDepth);
@@ -382,7 +374,6 @@ function calculateFloodWater(
     });
   }
 
-  console.log(`[FLOOD] Generated ${features.length}/${floodingSensors.length} flood lines`);
   return features;
 }
 
