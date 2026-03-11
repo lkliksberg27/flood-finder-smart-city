@@ -118,45 +118,51 @@ function pointToLineDist(
   return best;
 }
 
-/** Clip a LineString to only the portion within `radius` meters of `center`. */
-function clipLineNearPoint(
-  geom: GeoJSON.Geometry,
-  center: { lat: number; lng: number },
-  radius: number,
+/** Snap a point to the nearest vertex on any cached road. */
+function snapToRoad(
+  p: { lat: number; lng: number },
+  roads: CachedRoad[],
   cosLat: number,
-): GeoJSON.Geometry | null {
-  const coords =
-    geom.type === "LineString" ? geom.coordinates :
-    geom.type === "MultiLineString" ? geom.coordinates[0] : null;
-  if (!coords || coords.length < 2) return null;
-
-  // Collect contiguous runs of coordinates inside the radius
-  const segments: number[][][] = [];
-  let cur: number[][] = [];
-
-  for (const c of coords) {
-    const dx = (c[0] - center.lng) * 111320 * cosLat;
-    const dy = (c[1] - center.lat) * 111320;
-    if (Math.sqrt(dx * dx + dy * dy) <= radius) {
-      cur.push(c);
-    } else if (cur.length > 0) {
-      segments.push(cur);
-      cur = [];
+  maxDist = 60,
+): [number, number] | null {
+  let best: [number, number] | null = null;
+  let bestDist = Infinity;
+  for (const road of roads) {
+    const coords =
+      road.geometry.type === "LineString" ? road.geometry.coordinates :
+      road.geometry.type === "MultiLineString" ? road.geometry.coordinates[0] : null;
+    if (!coords) continue;
+    for (const c of coords) {
+      const dx = (c[0] - p.lng) * 111320 * cosLat;
+      const dy = (c[1] - p.lat) * 111320;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < bestDist) { bestDist = dist; best = [c[0], c[1]]; }
     }
   }
-  if (cur.length > 0) segments.push(cur);
-  if (segments.length === 0) return null;
+  return bestDist <= maxDist ? best : null;
+}
 
-  // Return the longest contiguous run
-  const best = segments.reduce((a, b) => (a.length >= b.length ? a : b));
-  if (best.length < 2) return null;
-  return { type: "LineString", coordinates: best };
+/** Estimate ground elevation at a point using IDW from all sensors. */
+function idwElevation(
+  lat: number, lng: number,
+  sensors: Array<{ lat: number; lng: number; elev: number }>,
+  cosLat: number,
+): number {
+  let wElev = 0, wTotal = 0;
+  for (const s of sensors) {
+    const dx = (s.lng - lng) * 111320 * cosLat;
+    const dy = (s.lat - lat) * 111320;
+    const w = 1 / (Math.max(Math.sqrt(dx * dx + dy * dy), 5) ** 2);
+    wElev += s.elev * w;
+    wTotal += w;
+  }
+  return wTotal > 0 ? wElev / wTotal : 0;
 }
 
 /**
- * For each flooding sensor, find its nearest road, clip to a
- * limited radius, and return only that segment as flooded.
- * No spreading to distant roads — clean, localized flood lines.
+ * For each flooding sensor: find nearest road, walk along it
+ * in both directions. Water extends further downhill (elevation-based).
+ * Returns localized flood line segments on actual road geometry.
  */
 function calculateFloodWater(
   cachedRoads: CachedRoad[],
@@ -174,35 +180,74 @@ function calculateFloodWater(
     }));
   if (floodingSensors.length === 0) return [];
 
+  const allSensors = devices.map((d) => ({
+    lat: d.lat, lng: d.lng,
+    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+  }));
+
   const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
   const features: GeoJSON.Feature[] = [];
 
   for (const sensor of floodingSensors) {
     const cosLat = Math.cos(sensor.lat * Math.PI / 180);
 
-    // Flood spreads along road: 50m base + 3m per cm of depth (max 150m)
-    const spreadRadius = Math.min(50 + sensor.depth * 3, 150);
-
-    // Find the closest road to this sensor
+    // Find nearest road (within 60m)
     let bestRoad: CachedRoad | null = null;
     let bestDist = Infinity;
     for (const road of cachedRoads) {
       const dist = pointToLineDist(sensor, road.geometry, cosLat);
       if (dist < bestDist) { bestDist = dist; bestRoad = road; }
     }
+    if (!bestRoad || bestDist > 60) continue;
 
-    // Sensor must be within 40m of a road
-    if (!bestRoad || bestDist > 40) continue;
+    const coords =
+      bestRoad.geometry.type === "LineString" ? bestRoad.geometry.coordinates :
+      bestRoad.geometry.type === "MultiLineString" ? bestRoad.geometry.coordinates[0] : null;
+    if (!coords || coords.length < 2) continue;
 
-    // Clip road geometry to within spreadRadius of sensor
-    const clipped = clipLineNearPoint(bestRoad.geometry, sensor, spreadRadius, cosLat);
-    if (!clipped) continue;
+    // Find nearest vertex on road
+    let nearIdx = 0, nearDist = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+      const dx = (coords[i][0] - sensor.lng) * 111320 * cosLat;
+      const dy = (coords[i][1] - sensor.lat) * 111320;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < nearDist) { nearDist = d; nearIdx = i; }
+    }
+
+    // Walk distance: 40m base + 3m per cm of depth (max 150m)
+    const baseWalk = Math.min(40 + sensor.depth * 3, 150);
+
+    // Walk forward along road
+    const segment: number[][] = [coords[nearIdx]];
+    let dist = 0;
+    for (let i = nearIdx + 1; i < coords.length; i++) {
+      const dx = (coords[i][0] - coords[i - 1][0]) * 111320 * cosLat;
+      const dy = (coords[i][1] - coords[i - 1][1]) * 111320;
+      dist += Math.sqrt(dx * dx + dy * dy);
+      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
+      const maxDist = ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk;
+      if (dist > maxDist) break;
+      segment.push(coords[i]);
+    }
+
+    // Walk backward along road
+    dist = 0;
+    for (let i = nearIdx - 1; i >= 0; i--) {
+      const dx = (coords[i][0] - coords[i + 1][0]) * 111320 * cosLat;
+      const dy = (coords[i][1] - coords[i + 1][1]) * 111320;
+      dist += Math.sqrt(dx * dx + dy * dy);
+      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
+      const maxDist = ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk;
+      if (dist > maxDist) break;
+      segment.unshift(coords[i]);
+    }
+
+    if (segment.length < 2) continue;
 
     const intensity = Math.min(1, sensor.depth / maxDepth);
-
     features.push({
       type: "Feature",
-      geometry: clipped,
+      geometry: { type: "LineString", coordinates: segment },
       properties: { intensity, depth: sensor.depth },
     });
   }
@@ -489,71 +534,88 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const map = mapRef.current;
     if (!map || !mapReady) return;
 
-    const alertFeatures: GeoJSON.Feature[] = [];
-    const dotFeatures: GeoJSON.Feature[] = [];
+    const cosLat = Math.cos(25.966 * Math.PI / 180);
 
-    devices.forEach((device) => {
-      const color = STATUS_COLORS[device.status] ?? "#6b7280";
-      const isHighlighted = device.device_id === highlightDeviceId;
+    const buildDotFeatures = (snap: boolean) => {
+      const alerts: GeoJSON.Feature[] = [];
+      const dots: GeoJSON.Feature[] = [];
 
-      const lastSeenText = device.last_seen
-        ? (() => {
-            const ms = Date.now() - new Date(device.last_seen).getTime();
-            if (ms < 60000) return "just now";
-            if (ms < 3600000) return `${Math.round(ms / 60000)}m ago`;
-            if (ms < 86400000) return `${Math.round(ms / 3600000)}h ago`;
-            return `${Math.round(ms / 86400000)}d ago`;
-          })()
-        : "never";
+      devices.forEach((device) => {
+        const color = STATUS_COLORS[device.status] ?? "#6b7280";
+        const isHighlighted = device.device_id === highlightDeviceId;
 
-      if (device.status === "alert") {
-        alertFeatures.push({
+        // Snap to nearest road for display if roads are cached
+        const snapped = snap ? snapToRoad(device, cachedRoadsRef.current, cosLat) : null;
+        const dLng = snapped ? snapped[0] : device.lng;
+        const dLat = snapped ? snapped[1] : device.lat;
+
+        const lastSeenText = device.last_seen
+          ? (() => {
+              const ms = Date.now() - new Date(device.last_seen).getTime();
+              if (ms < 60000) return "just now";
+              if (ms < 3600000) return `${Math.round(ms / 60000)}m ago`;
+              if (ms < 86400000) return `${Math.round(ms / 3600000)}h ago`;
+              return `${Math.round(ms / 86400000)}d ago`;
+            })()
+          : "never";
+
+        if (device.status === "alert") {
+          alerts.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [dLng, dLat] },
+            properties: {},
+          });
+        }
+
+        dots.push({
           type: "Feature",
-          geometry: { type: "Point", coordinates: [device.lng, device.lat] },
-          properties: {},
+          geometry: { type: "Point", coordinates: [dLng, dLat] },
+          properties: {
+            device_id: device.device_id,
+            name: device.name ?? "",
+            status: device.status,
+            color,
+            highlighted: isHighlighted,
+            altitude_baro: device.altitude_baro ?? 0,
+            baseline_distance_cm: device.baseline_distance_cm ?? 0,
+            battery_v: device.battery_v ?? 0,
+            neighborhood: device.neighborhood ?? "",
+            last_seen_text: lastSeenText,
+          },
         });
-      }
-
-      dotFeatures.push({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: [device.lng, device.lat] },
-        properties: {
-          device_id: device.device_id,
-          name: device.name ?? "",
-          status: device.status,
-          color,
-          highlighted: isHighlighted,
-          altitude_baro: device.altitude_baro ?? 0,
-          baseline_distance_cm: device.baseline_distance_cm ?? 0,
-          battery_v: device.battery_v ?? 0,
-          neighborhood: device.neighborhood ?? "",
-          last_seen_text: lastSeenText,
-        },
       });
-    });
+
+      return { alerts, dots };
+    };
 
     const alertSrc = map.getSource("device-alerts") as mapboxgl.GeoJSONSource | undefined;
     const dotSrc = map.getSource("device-dots") as mapboxgl.GeoJSONSource | undefined;
 
-    if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alertFeatures });
-    if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
-
-    // Update flood water using cached road geometry + elevation physics
-    const updateFloodRoads = () => {
+    const updateAll = () => {
       if (cachedRoadsRef.current.length === 0) {
         cachedRoadsRef.current = queryRoadsNearDevices(map, devices);
       }
+
+      // Snap dots to roads and update
+      const { alerts, dots } = buildDotFeatures(true);
+      if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
+      if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
+
+      // Calculate flood water
       const roads = calculateFloodWater(cachedRoadsRef.current, devices, floodDepths ?? {});
       const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
       if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
     };
 
     if (cachedRoadsRef.current.length > 0) {
-      // Roads already cached — update immediately
-      updateFloodRoads();
+      updateAll();
     } else {
-      // First load — wait for tiles to render, then cache roads and calculate
-      map.once("idle", updateFloodRoads);
+      // Show dots at original positions immediately
+      const { alerts, dots } = buildDotFeatures(false);
+      if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
+      if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
+      // Then snap + flood on idle
+      map.once("idle", updateAll);
     }
 
     // Fit bounds if we have devices

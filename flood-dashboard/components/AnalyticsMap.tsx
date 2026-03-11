@@ -74,37 +74,48 @@ function pointToLineDist(
   return best;
 }
 
-/** Clip a LineString to only the portion within `radius` meters of `center`. */
-function clipLineNearPoint(
-  geom: GeoJSON.Geometry,
-  center: { lat: number; lng: number },
-  radius: number,
+/** Snap a point to the nearest vertex on any cached road. */
+function snapToRoad(
+  p: { lat: number; lng: number },
+  roads: CachedRoad[],
   cosLat: number,
-): GeoJSON.Geometry | null {
-  const coords =
-    geom.type === "LineString" ? geom.coordinates :
-    geom.type === "MultiLineString" ? geom.coordinates[0] : null;
-  if (!coords || coords.length < 2) return null;
-  const segments: number[][][] = [];
-  let cur: number[][] = [];
-  for (const c of coords) {
-    const dx = (c[0] - center.lng) * 111320 * cosLat;
-    const dy = (c[1] - center.lat) * 111320;
-    if (Math.sqrt(dx * dx + dy * dy) <= radius) {
-      cur.push(c);
-    } else if (cur.length > 0) {
-      segments.push(cur);
-      cur = [];
+  maxDist = 60,
+): [number, number] | null {
+  let best: [number, number] | null = null;
+  let bestDist = Infinity;
+  for (const road of roads) {
+    const coords =
+      road.geometry.type === "LineString" ? road.geometry.coordinates :
+      road.geometry.type === "MultiLineString" ? road.geometry.coordinates[0] : null;
+    if (!coords) continue;
+    for (const c of coords) {
+      const dx = (c[0] - p.lng) * 111320 * cosLat;
+      const dy = (c[1] - p.lat) * 111320;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < bestDist) { bestDist = dist; best = [c[0], c[1]]; }
     }
   }
-  if (cur.length > 0) segments.push(cur);
-  if (segments.length === 0) return null;
-  const best = segments.reduce((a, b) => (a.length >= b.length ? a : b));
-  if (best.length < 2) return null;
-  return { type: "LineString", coordinates: best };
+  return bestDist <= maxDist ? best : null;
 }
 
-/** For each sensor with flood history, clip its nearest road segment. */
+/** Estimate ground elevation at a point using IDW from all sensors. */
+function idwElevation(
+  lat: number, lng: number,
+  sensors: Array<{ lat: number; lng: number; elev: number }>,
+  cosLat: number,
+): number {
+  let wElev = 0, wTotal = 0;
+  for (const s of sensors) {
+    const dx = (s.lng - lng) * 111320 * cosLat;
+    const dy = (s.lat - lat) * 111320;
+    const w = 1 / (Math.max(Math.sqrt(dx * dx + dy * dy), 5) ** 2);
+    wElev += s.elev * w;
+    wTotal += w;
+  }
+  return wTotal > 0 ? wElev / wTotal : 0;
+}
+
+/** For each sensor with flood history, walk along its nearest road. */
 function calculateAnalyticsFloodWater(
   cachedRoads: CachedRoad[],
   devices: Device[],
@@ -115,16 +126,22 @@ function calculateAnalyticsFloodWater(
     .filter((d) => (stats[d.device_id]?.count ?? 0) > 0)
     .map((d) => ({
       lat: d.lat, lng: d.lng,
+      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
       depth: stats[d.device_id].maxDepth,
     }));
   if (floodingSensors.length === 0) return [];
+
+  const allSensors = devices.map((d) => ({
+    lat: d.lat, lng: d.lng,
+    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+  }));
 
   const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
   const features: GeoJSON.Feature[] = [];
 
   for (const sensor of floodingSensors) {
     const cosLat = Math.cos(sensor.lat * Math.PI / 180);
-    const spreadRadius = Math.min(50 + sensor.depth * 3, 150);
+    const baseWalk = Math.min(40 + sensor.depth * 3, 150);
 
     let bestRoad: CachedRoad | null = null;
     let bestDist = Infinity;
@@ -132,13 +149,44 @@ function calculateAnalyticsFloodWater(
       const dist = pointToLineDist(sensor, road.geometry, cosLat);
       if (dist < bestDist) { bestDist = dist; bestRoad = road; }
     }
-    if (!bestRoad || bestDist > 40) continue;
+    if (!bestRoad || bestDist > 60) continue;
 
-    const clipped = clipLineNearPoint(bestRoad.geometry, sensor, spreadRadius, cosLat);
-    if (!clipped) continue;
+    const coords =
+      bestRoad.geometry.type === "LineString" ? bestRoad.geometry.coordinates :
+      bestRoad.geometry.type === "MultiLineString" ? bestRoad.geometry.coordinates[0] : null;
+    if (!coords || coords.length < 2) continue;
+
+    let nearIdx = 0, nearDist = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+      const dx = (coords[i][0] - sensor.lng) * 111320 * cosLat;
+      const dy = (coords[i][1] - sensor.lat) * 111320;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < nearDist) { nearDist = d; nearIdx = i; }
+    }
+
+    const segment: number[][] = [coords[nearIdx]];
+    let dist = 0;
+    for (let i = nearIdx + 1; i < coords.length; i++) {
+      const dx = (coords[i][0] - coords[i - 1][0]) * 111320 * cosLat;
+      const dy = (coords[i][1] - coords[i - 1][1]) * 111320;
+      dist += Math.sqrt(dx * dx + dy * dy);
+      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
+      if (dist > (ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk)) break;
+      segment.push(coords[i]);
+    }
+    dist = 0;
+    for (let i = nearIdx - 1; i >= 0; i--) {
+      const dx = (coords[i][0] - coords[i + 1][0]) * 111320 * cosLat;
+      const dy = (coords[i][1] - coords[i + 1][1]) * 111320;
+      dist += Math.sqrt(dx * dx + dy * dy);
+      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
+      if (dist > (ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk)) break;
+      segment.unshift(coords[i]);
+    }
+    if (segment.length < 2) continue;
 
     const intensity = Math.min(1, sensor.depth / maxDepth);
-    features.push({ type: "Feature", geometry: clipped, properties: { intensity } });
+    features.push({ type: "Feature", geometry: { type: "LineString", coordinates: segment }, properties: { intensity } });
   }
   return features;
 }

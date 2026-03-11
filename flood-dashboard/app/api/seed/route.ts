@@ -22,21 +22,21 @@ const SENSOR_GRID = [
   { id: "FF-011", name: "Ocean Blvd South End",         lat: 25.95650, lng: -80.11960, altBaro: 0.30, hood: "South Golden Beach" },
 
   // ── Golden Beach Dr (E-W cross street, lat 25.96630) ──
-  { id: "FF-012", name: "Golden Beach Dr West",         lat: 25.96630, lng: -80.12080, altBaro: 1.50, hood: "Central Golden Beach" },
+  { id: "FF-012", name: "Golden Beach Dr West",         lat: 25.96630, lng: -80.12110, altBaro: 1.50, hood: "Central Golden Beach" },
   { id: "FF-013", name: "Golden Beach Dr Mid",          lat: 25.96630, lng: -80.12200, altBaro: 1.35, hood: "Central Golden Beach" },
 
   // ── The Strand / Centre Is Dr (cross streets) ──
-  { id: "FF-014", name: "Centre Is Dr @ The Strand",    lat: 25.96800, lng: -80.12080, altBaro: 1.70, hood: "Central Golden Beach" },
-  { id: "FF-015", name: "The Strand South",             lat: 25.96450, lng: -80.12080, altBaro: 1.30, hood: "Central Golden Beach" },
+  { id: "FF-014", name: "Centre Is Dr @ The Strand",    lat: 25.96800, lng: -80.12110, altBaro: 1.70, hood: "Central Golden Beach" },
+  { id: "FF-015", name: "The Strand South",             lat: 25.96450, lng: -80.12110, altBaro: 1.30, hood: "Central Golden Beach" },
 
   // ── Northern cross streets ──
-  { id: "FF-016", name: "Palermo Ave West",             lat: 25.97200, lng: -80.12080, altBaro: 2.10, hood: "North Golden Beach" },
-  { id: "FF-017", name: "N Pkwy West",                  lat: 25.97400, lng: -80.12080, altBaro: 2.30, hood: "North Golden Beach" },
+  { id: "FF-016", name: "Palermo Ave West",             lat: 25.97200, lng: -80.12110, altBaro: 2.10, hood: "North Golden Beach" },
+  { id: "FF-017", name: "N Pkwy West",                  lat: 25.97400, lng: -80.12110, altBaro: 2.30, hood: "North Golden Beach" },
 
   // ── Southern cross streets ──
-  { id: "FF-018", name: "Ravenna Ave West",             lat: 25.96100, lng: -80.12080, altBaro: 0.80, hood: "South Golden Beach" },
-  { id: "FF-019", name: "S Island Rd West",             lat: 25.95800, lng: -80.12080, altBaro: 0.35, hood: "South Golden Beach" },
-  { id: "FF-020", name: "South Park West",              lat: 25.95950, lng: -80.12080, altBaro: 0.55, hood: "South Golden Beach" },
+  { id: "FF-018", name: "Ravenna Ave West",             lat: 25.96100, lng: -80.12110, altBaro: 0.80, hood: "South Golden Beach" },
+  { id: "FF-019", name: "S Island Rd West",             lat: 25.95800, lng: -80.12110, altBaro: 0.35, hood: "South Golden Beach" },
+  { id: "FF-020", name: "South Park West",              lat: 25.95950, lng: -80.12110, altBaro: 0.55, hood: "South Golden Beach" },
 ];
 
 function randomBetween(min: number, max: number) {
