@@ -52,10 +52,7 @@ const STREET_CLASSES = new Set([
   "tertiary", "tertiary_link", "street", "street_limited",
 ]);
 
-/**
- * Query road geometry from Mapbox vector tiles ONCE and cache.
- * Called after fitBounds + idle so the viewport covers all sensors.
- */
+/** Query road geometry from Mapbox vector tiles ONCE and cache. */
 function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad[] {
   const style = map.getStyle();
   if (!style?.layers) return [];
@@ -71,7 +68,7 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
     minLng = Math.min(minLng, d.lng);
     maxLng = Math.max(maxLng, d.lng);
   }
-  const pad = 0.002;
+  const pad = 0.003;
   const sw = map.project([minLng - pad, minLat - pad]);
   const ne = map.project([maxLng + pad, maxLat + pad]);
   const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
@@ -101,11 +98,65 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
   return roads;
 }
 
+/** Minimum distance (meters) from a point to any vertex of a LineString. */
+function pointToLineDist(
+  p: { lat: number; lng: number },
+  geom: GeoJSON.Geometry,
+  cosLat: number,
+): number {
+  const coords =
+    geom.type === "LineString" ? geom.coordinates :
+    geom.type === "MultiLineString" ? geom.coordinates[0] : null;
+  if (!coords) return Infinity;
+  let best = Infinity;
+  for (const c of coords) {
+    const dx = (c[0] - p.lng) * 111320 * cosLat;
+    const dy = (c[1] - p.lat) * 111320;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/** Clip a LineString to only the portion within `radius` meters of `center`. */
+function clipLineNearPoint(
+  geom: GeoJSON.Geometry,
+  center: { lat: number; lng: number },
+  radius: number,
+  cosLat: number,
+): GeoJSON.Geometry | null {
+  const coords =
+    geom.type === "LineString" ? geom.coordinates :
+    geom.type === "MultiLineString" ? geom.coordinates[0] : null;
+  if (!coords || coords.length < 2) return null;
+
+  // Collect contiguous runs of coordinates inside the radius
+  const segments: number[][][] = [];
+  let cur: number[][] = [];
+
+  for (const c of coords) {
+    const dx = (c[0] - center.lng) * 111320 * cosLat;
+    const dy = (c[1] - center.lat) * 111320;
+    if (Math.sqrt(dx * dx + dy * dy) <= radius) {
+      cur.push(c);
+    } else if (cur.length > 0) {
+      segments.push(cur);
+      cur = [];
+    }
+  }
+  if (cur.length > 0) segments.push(cur);
+  if (segments.length === 0) return null;
+
+  // Return the longest contiguous run
+  const best = segments.reduce((a, b) => (a.length >= b.length ? a : b));
+  if (best.length < 2) return null;
+  return { type: "LineString", coordinates: best };
+}
+
 /**
- * Calculate flood water on cached road geometry using elevation physics.
- * Water level = sensor_street_elevation + flood_depth.
- * Road segments below the water level get flooded; those above stay dry.
- * Elevation at each road point is estimated via IDW from ALL sensors.
+ * For each flooding sensor, find its nearest road, clip to a
+ * limited radius, and return only that segment as flooded.
+ * No spreading to distant roads — clean, localized flood lines.
  */
 function calculateFloodWater(
   cachedRoads: CachedRoad[],
@@ -123,65 +174,36 @@ function calculateFloodWater(
     }));
   if (floodingSensors.length === 0) return [];
 
-  // All sensors for ground-elevation interpolation
-  const allSensors = devices.map((d) => ({
-    lat: d.lat, lng: d.lng,
-    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
-  }));
-
   const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
-  const SPREAD_RADIUS = 150; // meters
   const features: GeoJSON.Feature[] = [];
 
-  for (const road of cachedRoads) {
-    const cosLat = Math.cos(road.midLat * Math.PI / 180);
+  for (const sensor of floodingSensors) {
+    const cosLat = Math.cos(sensor.lat * Math.PI / 180);
 
-    // Find flooding sensors within spread radius, IDW depth
-    let closestDist = Infinity;
-    let closestSensor: (typeof floodingSensors)[0] | null = null;
-    let wDepth = 0, wTotal = 0;
+    // Flood spreads along road: 50m base + 3m per cm of depth (max 150m)
+    const spreadRadius = Math.min(50 + sensor.depth * 3, 150);
 
-    for (const s of floodingSensors) {
-      const dx = (s.lng - road.midLng) * 111320 * cosLat;
-      const dy = (s.lat - road.midLat) * 111320;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > SPREAD_RADIUS) continue;
-      if (dist < closestDist) { closestDist = dist; closestSensor = s; }
-      const w = 1 / (Math.max(dist, 8) ** 2);
-      wDepth += s.depth * w;
-      wTotal += w;
+    // Find the closest road to this sensor
+    let bestRoad: CachedRoad | null = null;
+    let bestDist = Infinity;
+    for (const road of cachedRoads) {
+      const dist = pointToLineDist(sensor, road.geometry, cosLat);
+      if (dist < bestDist) { bestDist = dist; bestRoad = road; }
     }
-    if (!closestSensor || wTotal === 0) continue;
 
-    // Estimate ground elevation at road midpoint via IDW from ALL sensors
-    let wElev = 0, wElevTotal = 0;
-    for (const s of allSensors) {
-      const dx = (s.lng - road.midLng) * 111320 * cosLat;
-      const dy = (s.lat - road.midLat) * 111320;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const w = 1 / (Math.max(dist, 5) ** 2);
-      wElev += s.elev * w;
-      wElevTotal += w;
-    }
-    const roadElev = wElev / wElevTotal;
+    // Sensor must be within 40m of a road
+    if (!bestRoad || bestDist > 40) continue;
 
-    // Water level at the sensor = street elevation + flood depth (cm → m)
-    const interpDepth = wDepth / wTotal;
-    const waterLevel = closestSensor.elev + interpDepth / 100;
+    // Clip road geometry to within spreadRadius of sensor
+    const clipped = clipLineNearPoint(bestRoad.geometry, sensor, spreadRadius, cosLat);
+    if (!clipped) continue;
 
-    // Road must be below the water level to be flooded
-    if (roadElev > waterLevel) continue;
-
-    // Water depth at this road point
-    const waterDepthAtRoad = (waterLevel - roadElev) * 100; // cm
-    const distFade = 1 - (closestDist / SPREAD_RADIUS) ** 0.6;
-    const intensity = Math.min(1, (waterDepthAtRoad / (maxDepth * 1.2)) * distFade);
-    if (intensity < 0.05) continue;
+    const intensity = Math.min(1, sensor.depth / maxDepth);
 
     features.push({
       type: "Feature",
-      geometry: road.geometry,
-      properties: { intensity },
+      geometry: clipped,
+      properties: { intensity, depth: sensor.depth },
     });
   }
 
@@ -276,7 +298,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     mapRef.current = new mapboxgl.Map({
       container: containerRef.current,
       style: "mapbox://styles/mapbox/dark-v11",
-      center: [-80.1205, 25.9670],
+      center: [-80.1196, 25.9660],
       zoom: 15,
       attributionControl: false,
       pitchWithRotate: false,
