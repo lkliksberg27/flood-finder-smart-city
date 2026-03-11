@@ -32,6 +32,13 @@ function calculateAnalyticsFloodWater(
     .map((l) => l.id);
   if (roadLayerIds.length === 0) return [];
 
+  // Only actual streets — exclude service roads, driveways, paths
+  const STREET_CLASSES = new Set([
+    "motorway", "motorway_link", "trunk", "trunk_link",
+    "primary", "primary_link", "secondary", "secondary_link",
+    "tertiary", "tertiary_link", "street", "street_limited",
+  ]);
+
   let sMinLat = 90, sMaxLat = -90, sMinLng = 180, sMaxLng = -180;
   for (const s of floodingSensors) {
     if (s.lat < sMinLat) sMinLat = s.lat;
@@ -55,6 +62,8 @@ function calculateAnalyticsFloodWater(
     const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
     for (const f of roadFeatures) {
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+      const roadClass = (f.properties?.class ?? "") as string;
+      if (roadClass && !STREET_CLASSES.has(roadClass)) continue;
       const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -148,10 +157,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
             0.1, "#1976d2", 0.4, "#2196f3", 0.7, "#42a5f5", 1, "#64b5f6"],
           "line-width": ["interpolate", ["linear"], ["zoom"],
-            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 6],
-            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14],
-            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 6, 0.5, 14, 1, 24],
-            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 10, 0.5, 22, 1, 40]],
+            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1.5, 0.5, 3, 1, 5],
+            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 3, 0.5, 6, 1, 10],
+            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14],
+            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 6, 0.5, 12, 1, 20]],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
             0.08, 0.45, 0.3, 0.6, 0.6, 0.75, 1, 0.85],
           "line-blur": 0,
