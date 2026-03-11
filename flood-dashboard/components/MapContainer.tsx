@@ -52,7 +52,72 @@ const STREET_CLASSES = new Set([
   "tertiary", "tertiary_link", "street", "street_limited",
 ]);
 
-/** Query road geometry from Mapbox vector tiles ONCE and cache. */
+/** Merge road features that share endpoints into longer polylines. */
+function mergeRoadSegments(roads: CachedRoad[]): CachedRoad[] {
+  const cosLat = Math.cos(25.966 * Math.PI / 180);
+  const MERGE_THRESHOLD = 15; // meters
+
+  const segments: number[][][] = [];
+  for (const r of roads) {
+    const coords =
+      r.geometry.type === "LineString" ? (r.geometry as GeoJSON.LineString).coordinates :
+      r.geometry.type === "MultiLineString" ? (r.geometry as GeoJSON.MultiLineString).coordinates[0] : null;
+    if (coords && coords.length >= 2) segments.push(coords);
+  }
+
+  const ptDist = (a: number[], b: number[]): number => {
+    const dx = (a[0] - b[0]) * 111320 * cosLat;
+    const dy = (a[1] - b[1]) * 111320;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const used = new Set<number>();
+  const merged: number[][][] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    if (used.has(i)) continue;
+    used.add(i);
+    let chain = [...segments[i]];
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < segments.length; j++) {
+        if (used.has(j)) continue;
+        const seg = segments[j];
+        const chainEnd = chain[chain.length - 1];
+        const chainStart = chain[0];
+
+        if (ptDist(chainEnd, seg[0]) < MERGE_THRESHOLD) {
+          chain = chain.concat(seg.slice(1));
+          used.add(j); changed = true;
+        } else if (ptDist(chainEnd, seg[seg.length - 1]) < MERGE_THRESHOLD) {
+          chain = chain.concat([...seg].reverse().slice(1));
+          used.add(j); changed = true;
+        } else if (ptDist(chainStart, seg[seg.length - 1]) < MERGE_THRESHOLD) {
+          chain = seg.concat(chain.slice(1));
+          used.add(j); changed = true;
+        } else if (ptDist(chainStart, seg[0]) < MERGE_THRESHOLD) {
+          chain = [...seg].reverse().concat(chain.slice(1));
+          used.add(j); changed = true;
+        }
+      }
+    }
+
+    merged.push(chain);
+  }
+
+  return merged.map((coords) => {
+    const mid = Math.floor(coords.length / 2);
+    return {
+      midLat: coords[mid][1],
+      midLng: coords[mid][0],
+      geometry: { type: "LineString" as const, coordinates: coords } as GeoJSON.Geometry,
+    };
+  });
+}
+
+/** Query road geometry from Mapbox vector tiles ONCE, merge tile fragments, and cache. */
 function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad[] {
   const style = map.getStyle();
   if (!style?.layers) return [];
@@ -95,7 +160,8 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
     }
   } catch { /* tiles not ready */ }
 
-  return roads;
+  // Merge tile fragments into longer polylines (e.g. all of Ocean Blvd)
+  return mergeRoadSegments(roads);
 }
 
 /** Minimum distance (meters) from a point to any vertex of a LineString. */
@@ -174,11 +240,13 @@ function calculateFloodWater(
   const floodingSensors = devices
     .filter((d) => (depths[d.device_id] ?? 0) > 0)
     .map((d) => ({
+      id: d.device_id,
       lat: d.lat, lng: d.lng,
       elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
       depth: depths[d.device_id],
     }));
   if (floodingSensors.length === 0) return [];
+  console.log(`[FLOOD] ${floodingSensors.length} flooding sensors, ${cachedRoads.length} merged roads`);
 
   const allSensors = devices.map((d) => ({
     lat: d.lat, lng: d.lng,
@@ -198,12 +266,18 @@ function calculateFloodWater(
       const dist = pointToLineDist(sensor, road.geometry, cosLat);
       if (dist < bestDist) { bestDist = dist; bestRoad = road; }
     }
-    if (!bestRoad || bestDist > 60) continue;
+    if (!bestRoad || bestDist > 80) {
+      console.log(`[FLOOD] ${sensor.id}: no road within 80m (best=${bestDist.toFixed(0)}m)`);
+      continue;
+    }
 
     const coords =
-      bestRoad.geometry.type === "LineString" ? bestRoad.geometry.coordinates :
-      bestRoad.geometry.type === "MultiLineString" ? bestRoad.geometry.coordinates[0] : null;
-    if (!coords || coords.length < 2) continue;
+      bestRoad.geometry.type === "LineString" ? (bestRoad.geometry as GeoJSON.LineString).coordinates :
+      bestRoad.geometry.type === "MultiLineString" ? (bestRoad.geometry as GeoJSON.MultiLineString).coordinates[0] : null;
+    if (!coords || coords.length < 2) {
+      console.log(`[FLOOD] ${sensor.id}: road has <2 coords`);
+      continue;
+    }
 
     // Find nearest vertex on road
     let nearIdx = 0, nearDist = Infinity;
@@ -214,8 +288,8 @@ function calculateFloodWater(
       if (d < nearDist) { nearDist = d; nearIdx = i; }
     }
 
-    // Walk distance: 40m base + 3m per cm of depth (max 150m)
-    const baseWalk = Math.min(40 + sensor.depth * 3, 150);
+    // Walk distance: 40m base + 3m per cm of depth (max 200m)
+    const baseWalk = Math.min(40 + sensor.depth * 3, 200);
 
     // Walk forward along road
     const segment: number[][] = [coords[nearIdx]];
@@ -242,6 +316,7 @@ function calculateFloodWater(
       segment.unshift(coords[i]);
     }
 
+    console.log(`[FLOOD] ${sensor.id}: dist=${bestDist.toFixed(0)}m, roadCoords=${coords.length}, nearIdx=${nearIdx}, segment=${segment.length}, walk=${baseWalk.toFixed(0)}m`);
     if (segment.length < 2) continue;
 
     const intensity = Math.min(1, sensor.depth / maxDepth);
@@ -252,6 +327,7 @@ function calculateFloodWater(
     });
   }
 
+  console.log(`[FLOOD] Generated ${features.length}/${floodingSensors.length} flood lines`);
   return features;
 }
 
