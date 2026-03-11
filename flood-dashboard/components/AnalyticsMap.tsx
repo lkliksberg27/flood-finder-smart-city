@@ -7,38 +7,115 @@ import type { Device, FloodEvent } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-/** Generate fixed GeoJSON line segments at each sensor with flood history.
- *  Cross (+) shape at each intersection — stable across zoom levels. */
+type CachedRoad = { midLat: number; midLng: number; geometry: GeoJSON.Geometry };
+
+const STREET_CLASSES = new Set([
+  "motorway", "motorway_link", "trunk", "trunk_link",
+  "primary", "primary_link", "secondary", "secondary_link",
+  "tertiary", "tertiary_link", "street", "street_limited",
+]);
+
+function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad[] {
+  const style = map.getStyle();
+  if (!style?.layers) return [];
+  const roadLayerIds = style.layers
+    .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
+    .map((l) => l.id);
+  if (roadLayerIds.length === 0) return [];
+  let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+  for (const d of devices) {
+    minLat = Math.min(minLat, d.lat); maxLat = Math.max(maxLat, d.lat);
+    minLng = Math.min(minLng, d.lng); maxLng = Math.max(maxLng, d.lng);
+  }
+  const pad = 0.002;
+  const sw = map.project([minLng - pad, minLat - pad]);
+  const ne = map.project([maxLng + pad, maxLat + pad]);
+  const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
+    [Math.min(sw.x, ne.x), Math.min(sw.y, ne.y)],
+    [Math.max(sw.x, ne.x), Math.max(sw.y, ne.y)],
+  ];
+  const roads: CachedRoad[] = [];
+  const seen = new Set<string>();
+  try {
+    const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+    for (const f of features) {
+      if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+      const cls = (f.properties?.class ?? "") as string;
+      if (!STREET_CLASSES.has(cls)) continue;
+      const key = JSON.stringify(f.geometry).slice(0, 120);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const coords = f.geometry.type === "LineString" ? f.geometry.coordinates : f.geometry.coordinates[0];
+      if (!coords || coords.length === 0) continue;
+      const mid = Math.floor(coords.length / 2);
+      roads.push({ midLat: coords[mid][1], midLng: coords[mid][0], geometry: f.geometry });
+    }
+  } catch { /* tiles not ready */ }
+  return roads;
+}
+
+/** Flood water on cached roads using elevation physics + historical max depth. */
 function calculateAnalyticsFloodWater(
+  cachedRoads: CachedRoad[],
   devices: Device[],
   stats: Record<string, { count: number; totalDepth: number; maxDepth: number }>,
 ): GeoJSON.Feature[] {
-  const floodingSensors = devices.filter((d) => (stats[d.device_id]?.count ?? 0) > 0);
+  if (cachedRoads.length === 0) return [];
+  const floodingSensors = devices
+    .filter((d) => (stats[d.device_id]?.count ?? 0) > 0)
+    .map((d) => ({
+      lat: d.lat, lng: d.lng,
+      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+      depth: stats[d.device_id].maxDepth,
+    }));
   if (floodingSensors.length === 0) return [];
 
-  const maxDepth = Math.max(1, ...floodingSensors.map((d) => stats[d.device_id].maxDepth));
+  const allSensors = devices.map((d) => ({
+    lat: d.lat, lng: d.lng,
+    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+  }));
+  const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
+  const SPREAD_RADIUS = 150;
   const features: GeoJSON.Feature[] = [];
 
-  const ARM_LAT = 0.00072;
-  const ARM_LNG = 0.00080;
+  for (const road of cachedRoads) {
+    const cosLat = Math.cos(road.midLat * Math.PI / 180);
+    let closestDist = Infinity;
+    let closestSensor: (typeof floodingSensors)[0] | null = null;
+    let wDepth = 0, wTotal = 0;
+    for (const s of floodingSensors) {
+      const dx = (s.lng - road.midLng) * 111320 * cosLat;
+      const dy = (s.lat - road.midLat) * 111320;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > SPREAD_RADIUS) continue;
+      if (dist < closestDist) { closestDist = dist; closestSensor = s; }
+      const w = 1 / (Math.max(dist, 8) ** 2);
+      wDepth += s.depth * w;
+      wTotal += w;
+    }
+    if (!closestSensor || wTotal === 0) continue;
 
-  for (const d of floodingSensors) {
-    const s = stats[d.device_id];
-    const intensity = Math.min(1, s.maxDepth / maxDepth);
-    const props = { intensity, depth: s.maxDepth, device_id: d.device_id };
+    let wElev = 0, wElevTotal = 0;
+    for (const s of allSensors) {
+      const dx = (s.lng - road.midLng) * 111320 * cosLat;
+      const dy = (s.lat - road.midLat) * 111320;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const w = 1 / (Math.max(dist, 5) ** 2);
+      wElev += s.elev * w;
+      wElevTotal += w;
+    }
+    const roadElev = wElev / wElevTotal;
+    const interpDepth = wDepth / wTotal;
+    const waterLevel = closestSensor.elev + interpDepth / 100;
+    if (roadElev > waterLevel) continue;
 
-    features.push({
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: [[d.lng, d.lat - ARM_LAT], [d.lng, d.lat + ARM_LAT]] },
-      properties: props,
-    });
-    features.push({
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: [[d.lng - ARM_LNG, d.lat], [d.lng + ARM_LNG, d.lat]] },
-      properties: props,
-    });
+    const waterDepthAtRoad = (waterLevel - roadElev) * 100;
+    const distFade = 1 - (closestDist / SPREAD_RADIUS) ** 0.6;
+    const intensity = Math.min(1, (waterDepthAtRoad / (maxDepth * 1.2)) * distFade);
+    if (intensity < 0.05) continue;
+
+    features.push({ type: "Feature", geometry: road.geometry, properties: { intensity } });
   }
-
   return features;
 }
 
@@ -56,6 +133,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
   const containerRef = useRef<HTMLDivElement>(null);
   const devicesRef = useRef(devices);
   const statsRef = useRef<Record<string, { count: number; totalDepth: number; maxDepth: number }>>({});
+  const cachedRoadsRef = useRef<CachedRoad[]>([]);
   devicesRef.current = devices;
 
   // Initialize map
@@ -274,10 +352,21 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Update flood water — fixed GeoJSON, no road queries
-    const roads = calculateAnalyticsFloodWater(devices, deviceStats);
-    const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-    if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+    // Update flood water using cached road geometry + elevation physics
+    const updateFloodRoads = () => {
+      if (cachedRoadsRef.current.length === 0) {
+        cachedRoadsRef.current = queryRoadsNearDevices(map, devices);
+      }
+      const roads = calculateAnalyticsFloodWater(cachedRoadsRef.current, devices, deviceStats);
+      const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+    };
+
+    if (cachedRoadsRef.current.length > 0) {
+      updateFloodRoads();
+    } else {
+      map.once("idle", updateFloodRoads);
+    }
 
     // Fit bounds
     if (devices.length > 1) {

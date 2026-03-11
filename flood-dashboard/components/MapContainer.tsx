@@ -44,55 +44,144 @@ function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): str
     </div>`;
 }
 
+type CachedRoad = { midLat: number; midLng: number; geometry: GeoJSON.Geometry };
+
+const STREET_CLASSES = new Set([
+  "motorway", "motorway_link", "trunk", "trunk_link",
+  "primary", "primary_link", "secondary", "secondary_link",
+  "tertiary", "tertiary_link", "street", "street_limited",
+]);
+
 /**
- * Generate fixed GeoJSON line segments at each flooding sensor location.
- * Creates a cross (+) shape at the intersection representing flooded road.
- * No road queries — pure data-driven geometry that's stable across zoom levels.
- * Depth controls line intensity (width/opacity via Mapbox data-driven styling).
+ * Query road geometry from Mapbox vector tiles ONCE and cache.
+ * Called after fitBounds + idle so the viewport covers all sensors.
+ */
+function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad[] {
+  const style = map.getStyle();
+  if (!style?.layers) return [];
+  const roadLayerIds = style.layers
+    .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
+    .map((l) => l.id);
+  if (roadLayerIds.length === 0) return [];
+
+  let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+  for (const d of devices) {
+    minLat = Math.min(minLat, d.lat);
+    maxLat = Math.max(maxLat, d.lat);
+    minLng = Math.min(minLng, d.lng);
+    maxLng = Math.max(maxLng, d.lng);
+  }
+  const pad = 0.002;
+  const sw = map.project([minLng - pad, minLat - pad]);
+  const ne = map.project([maxLng + pad, maxLat + pad]);
+  const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
+    [Math.min(sw.x, ne.x), Math.min(sw.y, ne.y)],
+    [Math.max(sw.x, ne.x), Math.max(sw.y, ne.y)],
+  ];
+
+  const roads: CachedRoad[] = [];
+  const seen = new Set<string>();
+
+  try {
+    const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+    for (const f of features) {
+      if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+      const cls = (f.properties?.class ?? "") as string;
+      if (!STREET_CLASSES.has(cls)) continue;
+      const key = JSON.stringify(f.geometry).slice(0, 120);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const coords = f.geometry.type === "LineString" ? f.geometry.coordinates : f.geometry.coordinates[0];
+      if (!coords || coords.length === 0) continue;
+      const mid = Math.floor(coords.length / 2);
+      roads.push({ midLat: coords[mid][1], midLng: coords[mid][0], geometry: f.geometry });
+    }
+  } catch { /* tiles not ready */ }
+
+  return roads;
+}
+
+/**
+ * Calculate flood water on cached road geometry using elevation physics.
+ * Water level = sensor_street_elevation + flood_depth.
+ * Road segments below the water level get flooded; those above stay dry.
+ * Elevation at each road point is estimated via IDW from ALL sensors.
  */
 function calculateFloodWater(
+  cachedRoads: CachedRoad[],
   devices: Device[],
   depths: Record<string, number>,
 ): GeoJSON.Feature[] {
-  const floodingSensors = devices.filter((d) => (depths[d.device_id] ?? 0) > 0);
+  if (cachedRoads.length === 0) return [];
+
+  const floodingSensors = devices
+    .filter((d) => (depths[d.device_id] ?? 0) > 0)
+    .map((d) => ({
+      lat: d.lat, lng: d.lng,
+      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+      depth: depths[d.device_id],
+    }));
   if (floodingSensors.length === 0) return [];
 
-  const maxDepth = Math.max(1, ...floodingSensors.map((d) => depths[d.device_id]));
+  // All sensors for ground-elevation interpolation
+  const allSensors = devices.map((d) => ({
+    lat: d.lat, lng: d.lng,
+    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+  }));
+
+  const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
+  const SPREAD_RADIUS = 150; // meters
   const features: GeoJSON.Feature[] = [];
 
-  // Arm length ~80m in each direction from sensor (at lat ~25.97)
-  const ARM_LAT = 0.00072;
-  const ARM_LNG = 0.00080;
+  for (const road of cachedRoads) {
+    const cosLat = Math.cos(road.midLat * Math.PI / 180);
 
-  for (const d of floodingSensors) {
-    const depth = depths[d.device_id];
-    const intensity = Math.min(1, depth / maxDepth);
-    const props = { intensity, depth, device_id: d.device_id };
+    // Find flooding sensors within spread radius, IDW depth
+    let closestDist = Infinity;
+    let closestSensor: (typeof floodingSensors)[0] | null = null;
+    let wDepth = 0, wTotal = 0;
 
-    // N-S road segment through sensor
+    for (const s of floodingSensors) {
+      const dx = (s.lng - road.midLng) * 111320 * cosLat;
+      const dy = (s.lat - road.midLat) * 111320;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > SPREAD_RADIUS) continue;
+      if (dist < closestDist) { closestDist = dist; closestSensor = s; }
+      const w = 1 / (Math.max(dist, 8) ** 2);
+      wDepth += s.depth * w;
+      wTotal += w;
+    }
+    if (!closestSensor || wTotal === 0) continue;
+
+    // Estimate ground elevation at road midpoint via IDW from ALL sensors
+    let wElev = 0, wElevTotal = 0;
+    for (const s of allSensors) {
+      const dx = (s.lng - road.midLng) * 111320 * cosLat;
+      const dy = (s.lat - road.midLat) * 111320;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const w = 1 / (Math.max(dist, 5) ** 2);
+      wElev += s.elev * w;
+      wElevTotal += w;
+    }
+    const roadElev = wElev / wElevTotal;
+
+    // Water level at the sensor = street elevation + flood depth (cm → m)
+    const interpDepth = wDepth / wTotal;
+    const waterLevel = closestSensor.elev + interpDepth / 100;
+
+    // Road must be below the water level to be flooded
+    if (roadElev > waterLevel) continue;
+
+    // Water depth at this road point
+    const waterDepthAtRoad = (waterLevel - roadElev) * 100; // cm
+    const distFade = 1 - (closestDist / SPREAD_RADIUS) ** 0.6;
+    const intensity = Math.min(1, (waterDepthAtRoad / (maxDepth * 1.2)) * distFade);
+    if (intensity < 0.05) continue;
+
     features.push({
       type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [d.lng, d.lat - ARM_LAT],
-          [d.lng, d.lat + ARM_LAT],
-        ],
-      },
-      properties: props,
-    });
-
-    // E-W road segment through sensor
-    features.push({
-      type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [d.lng - ARM_LNG, d.lat],
-          [d.lng + ARM_LNG, d.lat],
-        ],
-      },
-      properties: props,
+      geometry: road.geometry,
+      properties: { intensity },
     });
   }
 
@@ -119,6 +208,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
   const onDeviceClickRef = useRef(onDeviceClick);
 
   const floodDepthsRef = useRef<Record<string, number>>({});
+  const cachedRoadsRef = useRef<CachedRoad[]>([]);
   devicesRef.current = devices;
   onDeviceClickRef.current = onDeviceClick;
   floodDepthsRef.current = floodDepths ?? {};
@@ -426,10 +516,23 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alertFeatures });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Update flood water — fixed GeoJSON, no road queries needed
-    const roads = calculateFloodWater(devices, floodDepths ?? {});
-    const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-    if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+    // Update flood water using cached road geometry + elevation physics
+    const updateFloodRoads = () => {
+      if (cachedRoadsRef.current.length === 0) {
+        cachedRoadsRef.current = queryRoadsNearDevices(map, devices);
+      }
+      const roads = calculateFloodWater(cachedRoadsRef.current, devices, floodDepths ?? {});
+      const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
+    };
+
+    if (cachedRoadsRef.current.length > 0) {
+      // Roads already cached — update immediately
+      updateFloodRoads();
+    } else {
+      // First load — wait for tiles to render, then cache roads and calculate
+      map.once("idle", updateFloodRoads);
+    }
 
     // Fit bounds if we have devices
     if (devices.length > 0 && map.getZoom() === 14) {
