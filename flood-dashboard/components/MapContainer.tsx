@@ -50,6 +50,7 @@ const STREET_CLASSES = new Set([
   "motorway", "motorway_link", "trunk", "trunk_link",
   "primary", "primary_link", "secondary", "secondary_link",
   "tertiary", "tertiary_link", "street", "street_limited",
+  "service", "pedestrian", "track",
 ]);
 
 /** Merge road features that share endpoints into longer polylines. */
@@ -146,7 +147,10 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
 
   try {
     const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+    const classCounts: Record<string, number> = {};
     for (const f of features) {
+      const cls = (f.properties?.class ?? "unknown") as string;
+      classCounts[cls] = (classCounts[cls] ?? 0) + 1;
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
       const cls = (f.properties?.class ?? "") as string;
       if (!STREET_CLASSES.has(cls)) continue;
@@ -158,10 +162,13 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
       const mid = Math.floor(coords.length / 2);
       roads.push({ midLat: coords[mid][1], midLng: coords[mid][0], geometry: f.geometry });
     }
+    console.log(`[ROADS] classes found:`, classCounts, `features: ${features.length}, kept: ${roads.length}`);
   } catch { /* tiles not ready */ }
 
   // Merge tile fragments into longer polylines (e.g. all of Ocean Blvd)
-  return mergeRoadSegments(roads);
+  const merged = mergeRoadSegments(roads);
+  console.log(`[ROADS] merged ${roads.length} segments → ${merged.length} polylines`);
+  return merged;
 }
 
 /** Minimum distance (meters) from a point to any vertex of a LineString. */
