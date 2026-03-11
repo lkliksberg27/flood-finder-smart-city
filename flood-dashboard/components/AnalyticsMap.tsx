@@ -176,7 +176,24 @@ function buildSyntheticRoad(
     .filter((d) => Math.abs(d.lng - sensor.lng) < SAME_ROAD_LNG_THRESHOLD)
     .sort((a, b) => a.lat - b.lat);
   if (nearbyOnSameRoad.length < 2) return null;
-  return nearbyOnSameRoad.map((d) => [d.lng, d.lat]);
+  const result: number[][] = [];
+  for (let i = 0; i < nearbyOnSameRoad.length; i++) {
+    const d = nearbyOnSameRoad[i];
+    result.push([d.lng, d.lat]);
+    if (i < nearbyOnSameRoad.length - 1) {
+      const next = nearbyOnSameRoad[i + 1];
+      const distM = Math.abs(next.lat - d.lat) * 111320;
+      const steps = Math.max(1, Math.ceil(distM / 10));
+      for (let s = 1; s < steps; s++) {
+        const t = s / steps;
+        result.push([
+          d.lng + (next.lng - d.lng) * t,
+          d.lat + (next.lat - d.lat) * t,
+        ]);
+      }
+    }
+  }
+  return result;
 }
 
 /** For each sensor with flood history, walk along its nearest road. */
