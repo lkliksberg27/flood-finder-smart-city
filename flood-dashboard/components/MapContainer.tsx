@@ -152,7 +152,6 @@ function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad
       const cls = (f.properties?.class ?? "unknown") as string;
       classCounts[cls] = (classCounts[cls] ?? 0) + 1;
       if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
-      const cls = (f.properties?.class ?? "") as string;
       if (!STREET_CLASSES.has(cls)) continue;
       const key = JSON.stringify(f.geometry).slice(0, 120);
       if (seen.has(key)) continue;
@@ -233,8 +232,26 @@ function idwElevation(
 }
 
 /**
- * For each flooding sensor: find nearest road, walk along it
- * in both directions. Water extends further downhill (elevation-based).
+ * Build a synthetic N-S road line through a sensor using nearby sensors
+ * on the same road (same lng within ~20m). Fallback when Mapbox tiles
+ * don't have the road geometry.
+ */
+function buildSyntheticRoad(
+  sensor: { lat: number; lng: number },
+  allDevices: Device[],
+  cosLat: number,
+): number[][] | null {
+  const SAME_ROAD_LNG_THRESHOLD = 0.0002; // ~20m
+  const nearbyOnSameRoad = allDevices
+    .filter((d) => Math.abs(d.lng - sensor.lng) < SAME_ROAD_LNG_THRESHOLD)
+    .sort((a, b) => a.lat - b.lat);
+  if (nearbyOnSameRoad.length < 2) return null;
+  return nearbyOnSameRoad.map((d) => [d.lng, d.lat]);
+}
+
+/**
+ * For each flooding sensor: find nearest road (Mapbox or synthetic),
+ * walk along it in both directions. Water extends further downhill.
  * Returns localized flood line segments on actual road geometry.
  */
 function calculateFloodWater(
@@ -242,8 +259,6 @@ function calculateFloodWater(
   devices: Device[],
   depths: Record<string, number>,
 ): GeoJSON.Feature[] {
-  if (cachedRoads.length === 0) return [];
-
   const floodingSensors = devices
     .filter((d) => (depths[d.device_id] ?? 0) > 0)
     .map((d) => ({
@@ -266,23 +281,31 @@ function calculateFloodWater(
   for (const sensor of floodingSensors) {
     const cosLat = Math.cos(sensor.lat * Math.PI / 180);
 
-    // Find nearest road (within 60m)
+    // Find nearest Mapbox road (within 120m)
     let bestRoad: CachedRoad | null = null;
     let bestDist = Infinity;
     for (const road of cachedRoads) {
       const dist = pointToLineDist(sensor, road.geometry, cosLat);
       if (dist < bestDist) { bestDist = dist; bestRoad = road; }
     }
-    if (!bestRoad || bestDist > 80) {
-      console.log(`[FLOOD] ${sensor.id}: no road within 80m (best=${bestDist.toFixed(0)}m)`);
-      continue;
+
+    let coords: number[][] | null = null;
+    let source = "mapbox";
+
+    if (bestRoad && bestDist <= 120) {
+      coords =
+        bestRoad.geometry.type === "LineString" ? (bestRoad.geometry as GeoJSON.LineString).coordinates as number[][] :
+        bestRoad.geometry.type === "MultiLineString" ? (bestRoad.geometry as GeoJSON.MultiLineString).coordinates[0] as number[][] : null;
     }
 
-    const coords =
-      bestRoad.geometry.type === "LineString" ? (bestRoad.geometry as GeoJSON.LineString).coordinates :
-      bestRoad.geometry.type === "MultiLineString" ? (bestRoad.geometry as GeoJSON.MultiLineString).coordinates[0] : null;
+    // Fallback: build synthetic road from sensors on the same road
     if (!coords || coords.length < 2) {
-      console.log(`[FLOOD] ${sensor.id}: road has <2 coords`);
+      coords = buildSyntheticRoad(sensor, devices, cosLat);
+      source = "synthetic";
+    }
+
+    if (!coords || coords.length < 2) {
+      console.log(`[FLOOD] ${sensor.id}: no road found (mapbox best=${bestDist.toFixed(0)}m, no synthetic)`);
       continue;
     }
 
@@ -323,7 +346,7 @@ function calculateFloodWater(
       segment.unshift(coords[i]);
     }
 
-    console.log(`[FLOOD] ${sensor.id}: dist=${bestDist.toFixed(0)}m, roadCoords=${coords.length}, nearIdx=${nearIdx}, segment=${segment.length}, walk=${baseWalk.toFixed(0)}m`);
+    console.log(`[FLOOD] ${sensor.id}: ${source} dist=${nearDist.toFixed(0)}m, coords=${coords.length}, segment=${segment.length}, walk=${baseWalk.toFixed(0)}m`);
     if (segment.length < 2) continue;
 
     const intensity = Math.min(1, sensor.depth / maxDepth);
