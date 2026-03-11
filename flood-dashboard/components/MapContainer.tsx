@@ -309,44 +309,51 @@ function calculateFloodWater(
       continue;
     }
 
-    // Find nearest vertex on road
-    let nearIdx = 0, nearDist = Infinity;
-    for (let i = 0; i < coords.length; i++) {
-      const dx = (coords[i][0] - sensor.lng) * 111320 * cosLat;
-      const dy = (coords[i][1] - sensor.lat) * 111320;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      if (d < nearDist) { nearDist = d; nearIdx = i; }
-    }
-
-    // Walk distance: 40m base + 3m per cm of depth (max 200m)
+    // Walk along road from nearest vertex
     const baseWalk = Math.min(40 + sensor.depth * 3, 200);
 
-    // Walk forward along road
-    const segment: number[][] = [coords[nearIdx]];
-    let dist = 0;
-    for (let i = nearIdx + 1; i < coords.length; i++) {
-      const dx = (coords[i][0] - coords[i - 1][0]) * 111320 * cosLat;
-      const dy = (coords[i][1] - coords[i - 1][1]) * 111320;
-      dist += Math.sqrt(dx * dx + dy * dy);
-      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
-      const maxDist = ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk;
-      if (dist > maxDist) break;
-      segment.push(coords[i]);
+    const walkRoad = (roadCoords: number[][]): number[][] => {
+      let nearIdx = 0, nearDist = Infinity;
+      for (let i = 0; i < roadCoords.length; i++) {
+        const dx = (roadCoords[i][0] - sensor.lng) * 111320 * cosLat;
+        const dy = (roadCoords[i][1] - sensor.lat) * 111320;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < nearDist) { nearDist = d; nearIdx = i; }
+      }
+      const seg: number[][] = [roadCoords[nearIdx]];
+      let d = 0;
+      for (let i = nearIdx + 1; i < roadCoords.length; i++) {
+        const dx = (roadCoords[i][0] - roadCoords[i - 1][0]) * 111320 * cosLat;
+        const dy = (roadCoords[i][1] - roadCoords[i - 1][1]) * 111320;
+        d += Math.sqrt(dx * dx + dy * dy);
+        const ptElev = idwElevation(roadCoords[i][1], roadCoords[i][0], allSensors, cosLat);
+        if (d > (ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk)) break;
+        seg.push(roadCoords[i]);
+      }
+      d = 0;
+      for (let i = nearIdx - 1; i >= 0; i--) {
+        const dx = (roadCoords[i][0] - roadCoords[i + 1][0]) * 111320 * cosLat;
+        const dy = (roadCoords[i][1] - roadCoords[i + 1][1]) * 111320;
+        d += Math.sqrt(dx * dx + dy * dy);
+        const ptElev = idwElevation(roadCoords[i][1], roadCoords[i][0], allSensors, cosLat);
+        if (d > (ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk)) break;
+        seg.unshift(roadCoords[i]);
+      }
+      return seg;
+    };
+
+    let segment = walkRoad(coords);
+
+    // If Mapbox road produced too few points, try synthetic road
+    if (segment.length < 2 && source === "mapbox") {
+      const synCoords = buildSyntheticRoad(sensor, devices, cosLat);
+      if (synCoords && synCoords.length >= 2) {
+        segment = walkRoad(synCoords);
+        source = "synthetic-fallback";
+      }
     }
 
-    // Walk backward along road
-    dist = 0;
-    for (let i = nearIdx - 1; i >= 0; i--) {
-      const dx = (coords[i][0] - coords[i + 1][0]) * 111320 * cosLat;
-      const dy = (coords[i][1] - coords[i + 1][1]) * 111320;
-      dist += Math.sqrt(dx * dx + dy * dy);
-      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
-      const maxDist = ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk;
-      if (dist > maxDist) break;
-      segment.unshift(coords[i]);
-    }
-
-    console.log(`[FLOOD] ${sensor.id}: ${source} dist=${nearDist.toFixed(0)}m, coords=${coords.length}, segment=${segment.length}, walk=${baseWalk.toFixed(0)}m`);
+    console.log(`[FLOOD] ${sensor.id}: ${source} segment=${segment.length}, walk=${baseWalk.toFixed(0)}m`);
     if (segment.length < 2) continue;
 
     const intensity = Math.min(1, sensor.depth / maxDepth);
