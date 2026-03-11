@@ -70,7 +70,7 @@ export async function POST() {
         altitude_baro: s.altBaro,
         mailbox_height_cm: 95,
         baseline_distance_cm: baselineCm,
-        status: i < 17 ? "online" : i < 19 ? "alert" : "offline" as const,
+        status: s.altBaro < 0.5 ? "alert" : i < 19 ? "online" : "offline" as const,
         battery_v: parseFloat(randomBetween(3.0, 4.2).toFixed(2)),
         last_seen: i < 19
           ? new Date(Date.now() - Math.random() * 600000).toISOString()
@@ -84,14 +84,33 @@ export async function POST() {
       await supabase.from("devices").upsert(dev, { onConflict: "device_id" });
     }
 
-    // ── 2. Seed flood events — heavily biased toward low-elevation sensors ──
-    // Low-elevation Biscayne Corridor sensors flood much more frequently
+    // ── 2. Seed flood events — biased toward low-elevation sensors ──
+    // Includes 4-6 ACTIVE floods (no ended_at) on the lowest sensors
     const floodEvents = [];
-    for (let i = 0; i < 80; i++) {
-      // Weight device selection by inverse elevation (lower = more floods)
+
+    // Active floods on lowest-elevation sensors (Biscayne Corridor)
+    const lowestSensors = [...devices]
+      .sort((a, b) => (a.altitude_baro - a.baseline_distance_cm / 100) - (b.altitude_baro - b.baseline_distance_cm / 100))
+      .slice(0, 6);
+    for (const dev of lowestSensors) {
+      const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
+      const elevFactor = Math.max(0.3, 1 - (streetElev + 0.7));
+      const peakDepth = Math.floor(randomBetween(8, 30) * elevFactor + 5);
+      floodEvents.push({
+        device_id: dev.device_id,
+        started_at: new Date(Date.now() - Math.floor(randomBetween(10, 90)) * 60000).toISOString(),
+        ended_at: null, // ACTIVE — not ended yet
+        peak_depth_cm: peakDepth,
+        rainfall_mm: parseFloat(randomBetween(8, 35).toFixed(1)),
+        tide_level_m: parseFloat(randomBetween(0.2, 0.55).toFixed(2)),
+      });
+    }
+
+    // Historical floods (ended)
+    for (let i = 0; i < 74; i++) {
       const weights = devices.map(d => {
         const streetElev = d.altitude_baro - d.baseline_distance_cm / 100;
-        return Math.max(0.1, 1 - (streetElev + 0.7)); // -0.7m → weight 1.7, +1.0m → weight 0.1
+        return Math.max(0.1, 1 - (streetElev + 0.7));
       });
       const totalWeight = weights.reduce((a, b) => a + b, 0);
       let rand = Math.random() * totalWeight;
@@ -104,7 +123,6 @@ export async function POST() {
 
       const startedAt = new Date(Date.now() - Math.random() * 28 * 86400 * 1000);
       const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
-      // Lower sensors get deeper floods and longer duration
       const elevFactor = Math.max(0.2, 1 - (streetElev + 0.7));
       const durationMin = Math.floor(randomBetween(10, 120) * elevFactor + 15);
       const endedAt = new Date(startedAt.getTime() + durationMin * 60000);
