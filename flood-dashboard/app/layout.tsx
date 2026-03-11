@@ -9,11 +9,11 @@ export const metadata: Metadata = {
     template: "%s — Flood Finder",
   },
   description:
-    "Real-time city-wide flood detection and infrastructure analysis for Aventura, FL. IoT sensors, NOAA weather/tide correlation, AI-powered recommendations.",
+    "Real-time city-wide flood detection and infrastructure analysis for Golden Beach, FL. IoT sensors, NOAA weather/tide correlation, AI-powered recommendations.",
   openGraph: {
     title: "Flood Finder — Smart City Flood Monitoring",
     description:
-      "Real-time flood detection with IoT sensors, NOAA data correlation, and AI infrastructure analysis for Aventura, FL.",
+      "Real-time flood detection with IoT sensors, NOAA data correlation, and AI infrastructure analysis for Golden Beach, FL.",
     type: "website",
   },
 };

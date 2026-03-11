@@ -247,7 +247,7 @@ export function Sidebar() {
               {activeAlerts} active flood{activeAlerts > 1 ? "s" : ""}
             </p>
           )}
-          <p className="text-xs text-text-secondary mt-1">Aventura, FL</p>
+          <p className="text-xs text-text-secondary mt-1">Golden Beach, FL</p>
           {user && (
             <div className="flex items-center justify-between mt-2 pt-2 border-t border-border-card">
               <p className="text-[11px] text-text-secondary truncate max-w-[130px]">

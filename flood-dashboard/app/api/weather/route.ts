@@ -42,8 +42,8 @@ async function fetchJSON(url: string): Promise<Record<string, unknown>> {
 }
 
 async function fetchWeather(): Promise<WeatherData> {
-  // Aventura, FL center coordinates
-  const lat = 25.9565, lng = -80.1392;
+  // Golden Beach, FL center coordinates
+  const lat = 25.9670, lng = -80.1205;
 
   // Get weather station + forecast in parallel
   const points = await fetchJSON(`https://api.weather.gov/points/${lat},${lng}`) as {

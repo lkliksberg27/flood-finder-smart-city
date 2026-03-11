@@ -7,95 +7,36 @@ import type { Device, FloodEvent } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-/** Show flood water on streets near sensors with recorded flood events.
- *  For analytics, uses maxDepth from historical events (not just active ones).
- *  Water appears only near sensors that have had floods, deeper = more water. */
+/** Generate fixed GeoJSON line segments at each sensor with flood history.
+ *  Cross (+) shape at each intersection — stable across zoom levels. */
 function calculateAnalyticsFloodWater(
-  map: mapboxgl.Map,
   devices: Device[],
   stats: Record<string, { count: number; totalDepth: number; maxDepth: number }>,
 ): GeoJSON.Feature[] {
-  const floodingSensors = devices
-    .filter((d) => (stats[d.device_id]?.count ?? 0) > 0)
-    .map((d) => {
-      const s = stats[d.device_id];
-      return { lat: d.lat, lng: d.lng, depth: s.maxDepth };
-    });
-
+  const floodingSensors = devices.filter((d) => (stats[d.device_id]?.count ?? 0) > 0);
   if (floodingSensors.length === 0) return [];
-  const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
 
-  const style = map.getStyle();
-  if (!style?.layers) return [];
-  const roadLayerIds = style.layers
-    .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
-    .map((l) => l.id);
-  if (roadLayerIds.length === 0) return [];
-
-  // Only actual streets — exclude service roads, driveways, paths
-  const STREET_CLASSES = new Set([
-    "motorway", "motorway_link", "trunk", "trunk_link",
-    "primary", "primary_link", "secondary", "secondary_link",
-    "tertiary", "tertiary_link", "street",
-  ]);
-
-  let sMinLat = 90, sMaxLat = -90, sMinLng = 180, sMaxLng = -180;
-  for (const s of floodingSensors) {
-    if (s.lat < sMinLat) sMinLat = s.lat;
-    if (s.lat > sMaxLat) sMaxLat = s.lat;
-    if (s.lng < sMinLng) sMinLng = s.lng;
-    if (s.lng > sMaxLng) sMaxLng = s.lng;
-  }
-  const pad = 0.003;
-  const sw = map.project([sMinLng - pad, sMinLat - pad]);
-  const ne = map.project([sMaxLng + pad, sMaxLat + pad]);
-  const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
-    [Math.min(sw.x, ne.x), Math.min(sw.y, ne.y)],
-    [Math.max(sw.x, ne.x), Math.max(sw.y, ne.y)],
-  ];
-
+  const maxDepth = Math.max(1, ...floodingSensors.map((d) => stats[d.device_id].maxDepth));
   const features: GeoJSON.Feature[] = [];
-  const seen = new Set<string>();
-  const SPREAD_RADIUS = 250;
 
-  try {
-    const roadFeatures = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
-    for (const f of roadFeatures) {
-      if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
-      const roadClass = (f.properties?.class ?? "") as string;
-      if (!STREET_CLASSES.has(roadClass)) continue;
-      const key = `${f.id ?? ""}_${JSON.stringify(f.geometry).slice(0, 100)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+  const ARM_LAT = 0.00072;
+  const ARM_LNG = 0.00080;
 
-      const coords = f.geometry.type === "LineString" ? f.geometry.coordinates : f.geometry.coordinates[0];
-      if (!coords || coords.length === 0) continue;
-      const mid = Math.floor(coords.length / 2);
-      const cLng = coords[mid][0], cLat = coords[mid][1];
-      const cosLat = Math.cos(cLat * Math.PI / 180);
+  for (const d of floodingSensors) {
+    const s = stats[d.device_id];
+    const intensity = Math.min(1, s.maxDepth / maxDepth);
+    const props = { intensity, depth: s.maxDepth, device_id: d.device_id };
 
-      let wDepth = 0, wTotal = 0, closestDist = Infinity;
-      for (const s of floodingSensors) {
-        const dx = (s.lng - cLng) * 111320 * cosLat;
-        const dy = (s.lat - cLat) * 111320;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > SPREAD_RADIUS) continue;
-        if (dist < closestDist) closestDist = dist;
-        const w = 1 / (Math.max(dist, 10) ** 2);
-        wDepth += s.depth * w;
-        wTotal += w;
-      }
-      if (wTotal === 0 || closestDist > SPREAD_RADIUS) continue;
-
-      const interpDepth = wDepth / wTotal;
-      const distFade = 1 - (closestDist / SPREAD_RADIUS) ** 0.7;
-      const intensity = Math.min(1, (interpDepth / maxDepth) * distFade);
-      if (intensity < 0.08) continue;
-
-      features.push({ type: "Feature", geometry: f.geometry, properties: { intensity } });
-    }
-  } catch {
-    // queryRenderedFeatures can fail during transitions
+    features.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: [[d.lng, d.lat - ARM_LAT], [d.lng, d.lat + ARM_LAT]] },
+      properties: props,
+    });
+    features.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: [[d.lng - ARM_LNG, d.lat], [d.lng + ARM_LNG, d.lat]] },
+      properties: props,
+    });
   }
 
   return features;
@@ -126,8 +67,8 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     mapRef.current = new mapboxgl.Map({
       container: containerRef.current,
       style: "mapbox://styles/mapbox/dark-v11",
-      center: [-80.1392, 25.9565],
-      zoom: 14,
+      center: [-80.1205, 25.9670],
+      zoom: 15,
       attributionControl: false,
       pitchWithRotate: false,
       dragRotate: false,
@@ -207,24 +148,6 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       });
 
       setMapReady(true);
-
-      // Update flood roads on zoom/pan (throttled)
-      let waterTimer: ReturnType<typeof setTimeout> | null = null;
-      const updateWater = () => {
-        if (waterTimer) return;
-        waterTimer = setTimeout(() => {
-          waterTimer = null;
-          try {
-            const roads = calculateAnalyticsFloodWater(map, devicesRef.current, statsRef.current);
-            const src = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-            if (src) src.setData({ type: "FeatureCollection", features: roads });
-          } catch {
-            // can fail during transitions
-          }
-        }, 100);
-      };
-      map.on("moveend", updateWater);
-      map.on("idle", updateWater);
 
       // Click handler
       map.on("click", "analytics-dots-layer", (e) => {
@@ -351,16 +274,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Update flood water after map finishes rendering tiles
-    map.once("idle", () => {
-      try {
-        const roads = calculateAnalyticsFloodWater(map, devices, deviceStats);
-        const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-        if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
-      } catch {
-        // can fail during transitions
-      }
-    });
+    // Update flood water — fixed GeoJSON, no road queries
+    const roads = calculateAnalyticsFloodWater(devices, deviceStats);
+    const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+    if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
 
     // Fit bounds
     if (devices.length > 1) {
