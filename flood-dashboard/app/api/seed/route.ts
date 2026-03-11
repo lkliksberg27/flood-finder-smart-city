@@ -59,6 +59,10 @@ export async function POST() {
   try {
     const supabase = createServiceClient();
 
+    // ── 0. Clear old data ──
+    await supabase.from("sensor_readings").delete().neq("id", 0);
+    await supabase.from("flood_events").delete().neq("id", 0);
+
     // ── 1. Seed 20 devices at residential intersections ──
     const devices = SENSOR_GRID.map((s, i) => {
       const baselineCm = 90 + Math.floor(Math.random() * 6);
