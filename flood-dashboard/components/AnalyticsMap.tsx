@@ -167,13 +167,24 @@ function idwElevation(
   return wTotal > 0 ? wElev / wTotal : 0;
 }
 
+function buildSyntheticRoad(
+  sensor: { lat: number; lng: number },
+  allDevices: Device[],
+): number[][] | null {
+  const SAME_ROAD_LNG_THRESHOLD = 0.0002;
+  const nearbyOnSameRoad = allDevices
+    .filter((d) => Math.abs(d.lng - sensor.lng) < SAME_ROAD_LNG_THRESHOLD)
+    .sort((a, b) => a.lat - b.lat);
+  if (nearbyOnSameRoad.length < 2) return null;
+  return nearbyOnSameRoad.map((d) => [d.lng, d.lat]);
+}
+
 /** For each sensor with flood history, walk along its nearest road. */
 function calculateAnalyticsFloodWater(
   cachedRoads: CachedRoad[],
   devices: Device[],
   stats: Record<string, { count: number; totalDepth: number; maxDepth: number }>,
 ): GeoJSON.Feature[] {
-  if (cachedRoads.length === 0) return [];
   const floodingSensors = devices
     .filter((d) => (stats[d.device_id]?.count ?? 0) > 0)
     .map((d) => ({
@@ -201,11 +212,16 @@ function calculateAnalyticsFloodWater(
       const dist = pointToLineDist(sensor, road.geometry, cosLat);
       if (dist < bestDist) { bestDist = dist; bestRoad = road; }
     }
-    if (!bestRoad || bestDist > 80) continue;
 
-    const coords =
-      bestRoad.geometry.type === "LineString" ? (bestRoad.geometry as GeoJSON.LineString).coordinates :
-      bestRoad.geometry.type === "MultiLineString" ? (bestRoad.geometry as GeoJSON.MultiLineString).coordinates[0] : null;
+    let coords: number[][] | null = null;
+    if (bestRoad && bestDist <= 120) {
+      coords =
+        bestRoad.geometry.type === "LineString" ? (bestRoad.geometry as GeoJSON.LineString).coordinates as number[][] :
+        bestRoad.geometry.type === "MultiLineString" ? (bestRoad.geometry as GeoJSON.MultiLineString).coordinates[0] as number[][] : null;
+    }
+    if (!coords || coords.length < 2) {
+      coords = buildSyntheticRoad(sensor, devices);
+    }
     if (!coords || coords.length < 2) continue;
 
     let nearIdx = 0, nearDist = Infinity;
