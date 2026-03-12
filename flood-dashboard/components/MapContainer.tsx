@@ -10,11 +10,12 @@ import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roa
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-const STATUS_COLORS: Record<string, string> = {
-  online: "#059669",
-  alert: "#dc2626",
-  offline: "#4b5563",
-};
+function sensorColor(status: string, floodDepth: number): string {
+  if (status === "offline") return "#4b5563"; // grey
+  if (floodDepth > 10) return "#dc2626";      // red — severe flooding
+  if (floodDepth > 0) return "#f59e0b";        // orange/amber — moderate flooding
+  return "#059669";                             // green — no flooding
+}
 
 function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): string {
   if (values.length < 2) return "";
@@ -328,8 +329,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const alerts: GeoJSON.Feature[] = [];
     const dots: GeoJSON.Feature[] = [];
 
+    const depths = floodDepths ?? {};
     devices.forEach((device) => {
-      const color = STATUS_COLORS[device.status] ?? "#6b7280";
+      const depth = depths[device.device_id] ?? 0;
+      const color = sensorColor(device.status, depth);
       const isHighlighted = device.device_id === highlightDeviceId;
 
       const lastSeenText = device.last_seen
@@ -342,7 +345,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           })()
         : "never";
 
-      if (device.status === "alert") {
+      if (depth > 10) {
         alerts.push({
           type: "Feature",
           geometry: { type: "Point", coordinates: [device.lng, device.lat] },
@@ -376,7 +379,6 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
     // Query actual Mapbox road geometry and calculate flood water
-    const depths = floodDepths ?? {};
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout>;
 
@@ -473,11 +475,15 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#059669", display: "inline-block" }} />
-          <span>Online</span>
+          <span>No Flooding</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#f59e0b", display: "inline-block" }} />
+          <span>Moderate Flood</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", display: "inline-block" }} />
-          <span>Flood Alert</span>
+          <span>Severe Flood</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4b5563", display: "inline-block" }} />
