@@ -163,7 +163,9 @@ export function queryMapboxRoads(
   }
 
   const merged = mergeSegments(allCoords);
-  return merged.length > 0 ? merged : buildFallbackRoads(devices);
+  // Always include fallback roads so sensors in unloaded tile areas still show water.
+  // calculateFloodFeatures will prefer the closer Mapbox roads when available.
+  return [...merged, ...buildFallbackRoads(devices)];
 }
 
 /** IDW elevation estimate at a point using the full sensor network */

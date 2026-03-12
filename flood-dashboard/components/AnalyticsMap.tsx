@@ -47,10 +47,9 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     const map = mapRef.current;
 
-    // Fix grey-map-on-load: resize after container is fully rendered
-    setTimeout(() => map.resize(), 100);
-    setTimeout(() => map.resize(), 500);
-    setTimeout(() => map.resize(), 1500);
+    // Fix grey-map-on-load: resize whenever container dimensions change
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(containerRef.current);
 
     map.on("load", () => {
       map.addSource("flood-roads", {
@@ -191,6 +190,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     });
 
     return () => {
+      resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
       setMapReady(false);
