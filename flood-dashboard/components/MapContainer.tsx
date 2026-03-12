@@ -138,10 +138,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     const map = mapRef.current;
 
-    // Fix grey-map-on-load: resize after container is fully rendered
-    setTimeout(() => map.resize(), 100);
-    setTimeout(() => map.resize(), 500);
-    setTimeout(() => map.resize(), 1500);
+    // Fix grey-map-on-load: resize whenever container dimensions change
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(containerRef.current);
 
     map.on("load", () => {
       map.addSource("device-alerts", {
@@ -308,6 +307,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     });
 
     return () => {
+      resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
       setMapReady(false);
