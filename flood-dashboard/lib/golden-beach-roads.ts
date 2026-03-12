@@ -79,6 +79,40 @@ function mergeSegments(segments: number[][][]): number[][][] {
 }
 
 /**
+ * Build fallback road geometry from sensor positions.
+ * Used when Mapbox tiles haven't loaded yet so flood water is always visible.
+ */
+function buildFallbackRoads(devices: Device[]): number[][][] {
+  const OCEAN_LNG = -80.11960;
+  const roads: number[][][] = [];
+
+  // Ocean Blvd: continuous N-S road through sensors at lng ~-80.11960
+  const oceanDevs = devices
+    .filter(d => Math.abs(d.lng - OCEAN_LNG) < 0.0008)
+    .sort((a, b) => a.lat - b.lat);
+  if (oceanDevs.length >= 2) {
+    roads.push([
+      [OCEAN_LNG, oceanDevs[0].lat - 0.0008],
+      ...oceanDevs.map(d => [d.lng, d.lat]),
+      [OCEAN_LNG, oceanDevs[oceanDevs.length - 1].lat + 0.0008],
+    ]);
+  }
+
+  // E-W cross streets: sensor to Ocean Blvd
+  for (const d of devices) {
+    if (Math.abs(d.lng - OCEAN_LNG) < 0.0008) continue;
+    roads.push([
+      [d.lng - 0.0003, d.lat],
+      [d.lng, d.lat],
+      [OCEAN_LNG, d.lat],
+      [OCEAN_LNG + 0.0003, d.lat],
+    ]);
+  }
+
+  return roads;
+}
+
+/**
  * Query actual road geometry from Mapbox vector tiles.
  * Queries a small area around each sensor to get the roads it's on.
  * Merges tile fragments of the same road (direction-aware).
@@ -128,7 +162,8 @@ export function queryMapboxRoads(
     }
   }
 
-  return mergeSegments(allCoords);
+  const merged = mergeSegments(allCoords);
+  return merged.length > 0 ? merged : buildFallbackRoads(devices);
 }
 
 /** IDW elevation estimate at a point using the full sensor network */
