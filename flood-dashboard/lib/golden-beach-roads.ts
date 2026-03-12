@@ -246,9 +246,10 @@ export function calculateFloodFeatures(
   const features: GeoJSON.Feature[] = [];
 
   for (const sensor of flooding) {
-    // Realistic spread: ~20m base + 2m per cm depth, capped at 100m
-    const walkMax = Math.min(20 + sensor.depth * 2, 100);
+    // Water surface level = street elevation at sensor + measured flood depth
+    const waterSurface = sensor.elev + sensor.depth / 100;
     const sensorPt: number[] = [sensor.lng, sensor.lat];
+    const MAX_WALK = 150; // safety cap in meters
 
     for (const road of roads) {
       // Find nearest vertex on this road to the sensor
@@ -260,22 +261,24 @@ export function calculateFloodFeatures(
       // 30m threshold — sensor sits on or beside this road
       if (nearDist > 30) continue;
 
-      // Walk forward along road
+      // Walk forward — water extends while street stays below water surface
       const seg: number[][] = [road[nearIdx]];
       let d = 0;
       for (let i = nearIdx + 1; i < road.length; i++) {
         d += ptDist(road[i - 1], road[i]);
-        const elev = idwElev(road[i][0], road[i][1], allSensors);
-        if (d > (elev < sensor.elev ? walkMax * 1.3 : walkMax)) break;
+        if (d > MAX_WALK) break;
+        const streetElev = idwElev(road[i][0], road[i][1], allSensors);
+        if (streetElev > waterSurface) break; // street rises above water
         seg.push(road[i]);
       }
 
-      // Walk backward along road
+      // Walk backward — same elevation check
       d = 0;
       for (let i = nearIdx - 1; i >= 0; i--) {
         d += ptDist(road[i + 1], road[i]);
-        const elev = idwElev(road[i][0], road[i][1], allSensors);
-        if (d > (elev < sensor.elev ? walkMax * 1.3 : walkMax)) break;
+        if (d > MAX_WALK) break;
+        const streetElev = idwElev(road[i][0], road[i][1], allSensors);
+        if (streetElev > waterSurface) break;
         seg.unshift(road[i]);
       }
 
