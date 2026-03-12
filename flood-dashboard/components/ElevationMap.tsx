@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import {
@@ -31,9 +31,9 @@ interface Props {
 }
 
 export function ElevationMap({ devices, showOverlay }: Props) {
+  const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const sourcesAdded = useRef(false);
 
   // Initialize map
   useEffect(() => {
@@ -119,7 +119,7 @@ export function ElevationMap({ devices, showOverlay }: Props) {
         },
       });
 
-      sourcesAdded.current = true;
+      setMapReady(true);
 
       // Click handler for popups
       map.on("click", "elev-circles-layer", (e) => {
@@ -170,14 +170,14 @@ export function ElevationMap({ devices, showOverlay }: Props) {
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
-      sourcesAdded.current = false;
+      setMapReady(false);
     };
   }, []);
 
   // Update data when devices/showOverlay change
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !sourcesAdded.current) return;
+    if (!map || !mapReady) return;
 
     const flowSrc = map.getSource("elev-flow-lines") as mapboxgl.GeoJSONSource | undefined;
     const circSrc = map.getSource("elev-circles") as mapboxgl.GeoJSONSource | undefined;
@@ -276,7 +276,7 @@ export function ElevationMap({ devices, showOverlay }: Props) {
       withElev.forEach((d) => bounds.extend([d.lng, d.lat]));
       map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
     }
-  }, [devices, showOverlay]);
+  }, [devices, showOverlay, mapReady]);
 
   return (
     <div
