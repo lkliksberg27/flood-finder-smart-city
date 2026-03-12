@@ -81,32 +81,58 @@ function mergeSegments(segments: number[][][]): number[][][] {
 /**
  * Build fallback road geometry from sensor positions.
  * Used when Mapbox tiles haven't loaded yet so flood water is always visible.
+ * Auto-detects N-S road columns and E-W cross streets from sensor layout.
  */
 function buildFallbackRoads(devices: Device[]): number[][][] {
-  const OCEAN_LNG = -80.11960;
   const roads: number[][][] = [];
+  if (devices.length === 0) return roads;
 
-  // Ocean Blvd: continuous N-S road through sensors at lng ~-80.11960
-  const oceanDevs = devices
-    .filter(d => Math.abs(d.lng - OCEAN_LNG) < 0.0008)
-    .sort((a, b) => a.lat - b.lat);
-  if (oceanDevs.length >= 2) {
-    roads.push([
-      [OCEAN_LNG, oceanDevs[0].lat - 0.0008],
-      ...oceanDevs.map(d => [d.lng, d.lat]),
-      [OCEAN_LNG, oceanDevs[oceanDevs.length - 1].lat + 0.0008],
-    ]);
+  // Auto-detect N-S road columns by clustering sensors by longitude
+  const LNG_TOLERANCE = 0.0008; // ~70m
+  const columns: { lng: number; devices: Device[] }[] = [];
+
+  for (const d of devices) {
+    const col = columns.find(c => Math.abs(c.lng - d.lng) < LNG_TOLERANCE);
+    if (col) {
+      col.devices.push(d);
+    } else {
+      columns.push({ lng: d.lng, devices: [d] });
+    }
   }
 
-  // E-W cross streets: sensor to Ocean Blvd
-  for (const d of devices) {
-    if (Math.abs(d.lng - OCEAN_LNG) < 0.0008) continue;
-    roads.push([
-      [d.lng - 0.0003, d.lat],
-      [d.lng, d.lat],
-      [OCEAN_LNG, d.lat],
-      [OCEAN_LNG + 0.0003, d.lat],
-    ]);
+  // Build a N-S road for each column with 2+ sensors
+  for (const col of columns) {
+    const sorted = [...col.devices].sort((a, b) => a.lat - b.lat);
+    if (sorted.length >= 2) {
+      roads.push([
+        [col.lng, sorted[0].lat - 0.0008],
+        ...sorted.map(d => [d.lng, d.lat]),
+        [col.lng, sorted[sorted.length - 1].lat + 0.0008],
+      ]);
+    }
+  }
+
+  // Build E-W cross streets between sensors at approximately the same latitude
+  const LAT_TOLERANCE = 0.0004; // ~44m
+  if (columns.length >= 2) {
+    for (let i = 0; i < columns.length; i++) {
+      for (let j = i + 1; j < columns.length; j++) {
+        for (const d1 of columns[i].devices) {
+          for (const d2 of columns[j].devices) {
+            if (Math.abs(d1.lat - d2.lat) < LAT_TOLERANCE) {
+              const minLng = Math.min(d1.lng, d2.lng);
+              const maxLng = Math.max(d1.lng, d2.lng);
+              roads.push([
+                [minLng - 0.0003, d1.lat],
+                [d1.lng, d1.lat],
+                [d2.lng, d2.lat],
+                [maxLng + 0.0003, d2.lat],
+              ]);
+            }
+          }
+        }
+      }
+    }
   }
 
   return roads;
@@ -123,12 +149,12 @@ export function queryMapboxRoads(
   devices: Device[],
 ): number[][][] {
   const style = map.getStyle();
-  if (!style?.layers) return [];
+  if (!style?.layers) return buildFallbackRoads(devices);
 
   const roadLayerIds = style.layers
     .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
     .map((l) => l.id);
-  if (roadLayerIds.length === 0) return [];
+  if (roadLayerIds.length === 0) return buildFallbackRoads(devices);
 
   const allCoords: number[][][] = [];
   const seen = new Set<string>();
@@ -163,9 +189,9 @@ export function queryMapboxRoads(
   }
 
   const merged = mergeSegments(allCoords);
-  // Always include fallback roads so sensors in unloaded tile areas still show water.
-  // calculateFloodFeatures will prefer the closer Mapbox roads when available.
-  return [...merged, ...buildFallbackRoads(devices)];
+  // Use real Mapbox roads when tiles are loaded; fall back to synthetic geometry only
+  // when no tiles are available. Mixing both creates duplicate/inaccurate water lines.
+  return merged.length > 0 ? merged : buildFallbackRoads(devices);
 }
 
 /** IDW elevation estimate at a point using the full sensor network */
