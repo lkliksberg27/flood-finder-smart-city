@@ -279,9 +279,8 @@ export function ElevationMap({ devices, showOverlay }: Props) {
   }, [devices, showOverlay, mapReady]);
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 h-[calc(100vh-140px)] rounded-lg overflow-hidden border border-border-card"
-    />
+    <div className="flex-1 h-[calc(100vh-140px)] rounded-lg overflow-hidden border border-border-card" style={{ position: "relative" }}>
+      <div ref={containerRef} style={{ height: "100%", width: "100%", borderRadius: "8px" }} />
+    </div>
   );
 }
