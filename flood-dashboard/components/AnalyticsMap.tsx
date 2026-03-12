@@ -4,269 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device, FloodEvent } from "@/lib/types";
+import { calculateFloodFeatures } from "@/lib/golden-beach-roads";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
-
-type CachedRoad = { midLat: number; midLng: number; geometry: GeoJSON.Geometry };
-
-function mergeRoadSegments(roads: CachedRoad[]): CachedRoad[] {
-  const cosLat = Math.cos(25.966 * Math.PI / 180);
-  const MERGE_THRESHOLD = 15;
-  const segments: number[][][] = [];
-  for (const r of roads) {
-    const coords =
-      r.geometry.type === "LineString" ? (r.geometry as GeoJSON.LineString).coordinates :
-      r.geometry.type === "MultiLineString" ? (r.geometry as GeoJSON.MultiLineString).coordinates[0] : null;
-    if (coords && coords.length >= 2) segments.push(coords);
-  }
-  const ptDist = (a: number[], b: number[]): number => {
-    const dx = (a[0] - b[0]) * 111320 * cosLat;
-    const dy = (a[1] - b[1]) * 111320;
-    return Math.sqrt(dx * dx + dy * dy);
-  };
-  const used = new Set<number>();
-  const merged: number[][][] = [];
-  for (let i = 0; i < segments.length; i++) {
-    if (used.has(i)) continue;
-    used.add(i);
-    let chain = [...segments[i]];
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (let j = 0; j < segments.length; j++) {
-        if (used.has(j)) continue;
-        const seg = segments[j];
-        const chainEnd = chain[chain.length - 1];
-        const chainStart = chain[0];
-        if (ptDist(chainEnd, seg[0]) < MERGE_THRESHOLD) {
-          chain = chain.concat(seg.slice(1)); used.add(j); changed = true;
-        } else if (ptDist(chainEnd, seg[seg.length - 1]) < MERGE_THRESHOLD) {
-          chain = chain.concat([...seg].reverse().slice(1)); used.add(j); changed = true;
-        } else if (ptDist(chainStart, seg[seg.length - 1]) < MERGE_THRESHOLD) {
-          chain = seg.concat(chain.slice(1)); used.add(j); changed = true;
-        } else if (ptDist(chainStart, seg[0]) < MERGE_THRESHOLD) {
-          chain = [...seg].reverse().concat(chain.slice(1)); used.add(j); changed = true;
-        }
-      }
-    }
-    merged.push(chain);
-  }
-  return merged.map((coords) => {
-    const mid = Math.floor(coords.length / 2);
-    return {
-      midLat: coords[mid][1], midLng: coords[mid][0],
-      geometry: { type: "LineString" as const, coordinates: coords } as GeoJSON.Geometry,
-    };
-  });
-}
-
-function queryRoadsNearDevices(map: mapboxgl.Map, devices: Device[]): CachedRoad[] {
-  const style = map.getStyle();
-  if (!style?.layers) return [];
-  const roadLayerIds = style.layers
-    .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
-    .map((l) => l.id);
-  if (roadLayerIds.length === 0) return [];
-  let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
-  for (const d of devices) {
-    minLat = Math.min(minLat, d.lat); maxLat = Math.max(maxLat, d.lat);
-    minLng = Math.min(minLng, d.lng); maxLng = Math.max(maxLng, d.lng);
-  }
-  const pad = 0.003;
-  const sw = map.project([minLng - pad, minLat - pad]);
-  const ne = map.project([maxLng + pad, maxLat + pad]);
-  const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
-    [Math.min(sw.x, ne.x), Math.min(sw.y, ne.y)],
-    [Math.max(sw.x, ne.x), Math.max(sw.y, ne.y)],
-  ];
-  const roads: CachedRoad[] = [];
-  const seen = new Set<string>();
-  try {
-    const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
-    for (const f of features) {
-      if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
-      // Accept all road features — no class filter
-      const key = JSON.stringify(f.geometry).slice(0, 120);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const coords = f.geometry.type === "LineString" ? f.geometry.coordinates : f.geometry.coordinates[0];
-      if (!coords || coords.length === 0) continue;
-      const mid = Math.floor(coords.length / 2);
-      roads.push({ midLat: coords[mid][1], midLng: coords[mid][0], geometry: f.geometry });
-    }
-  } catch { /* tiles not ready */ }
-  return mergeRoadSegments(roads);
-}
-
-/** Minimum distance (meters) from a point to any vertex of a LineString. */
-function pointToLineDist(
-  p: { lat: number; lng: number },
-  geom: GeoJSON.Geometry,
-  cosLat: number,
-): number {
-  const coords =
-    geom.type === "LineString" ? geom.coordinates :
-    geom.type === "MultiLineString" ? geom.coordinates[0] : null;
-  if (!coords) return Infinity;
-  let best = Infinity;
-  for (const c of coords) {
-    const dx = (c[0] - p.lng) * 111320 * cosLat;
-    const dy = (c[1] - p.lat) * 111320;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d < best) best = d;
-  }
-  return best;
-}
-
-/** Snap a point to the nearest vertex on any cached road. */
-function snapToRoad(
-  p: { lat: number; lng: number },
-  roads: CachedRoad[],
-  cosLat: number,
-  maxDist = 60,
-): [number, number] | null {
-  let best: [number, number] | null = null;
-  let bestDist = Infinity;
-  for (const road of roads) {
-    const coords =
-      road.geometry.type === "LineString" ? road.geometry.coordinates :
-      road.geometry.type === "MultiLineString" ? road.geometry.coordinates[0] : null;
-    if (!coords) continue;
-    for (const c of coords) {
-      const dx = (c[0] - p.lng) * 111320 * cosLat;
-      const dy = (c[1] - p.lat) * 111320;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < bestDist) { bestDist = dist; best = [c[0], c[1]]; }
-    }
-  }
-  return bestDist <= maxDist ? best : null;
-}
-
-/** Estimate ground elevation at a point using IDW from all sensors. */
-function idwElevation(
-  lat: number, lng: number,
-  sensors: Array<{ lat: number; lng: number; elev: number }>,
-  cosLat: number,
-): number {
-  let wElev = 0, wTotal = 0;
-  for (const s of sensors) {
-    const dx = (s.lng - lng) * 111320 * cosLat;
-    const dy = (s.lat - lat) * 111320;
-    const w = 1 / (Math.max(Math.sqrt(dx * dx + dy * dy), 5) ** 2);
-    wElev += s.elev * w;
-    wTotal += w;
-  }
-  return wTotal > 0 ? wElev / wTotal : 0;
-}
-
-function buildSyntheticRoad(
-  sensor: { lat: number; lng: number },
-  allDevices: Device[],
-): number[][] | null {
-  const SAME_ROAD_LNG_THRESHOLD = 0.0002;
-  const nearbyOnSameRoad = allDevices
-    .filter((d) => Math.abs(d.lng - sensor.lng) < SAME_ROAD_LNG_THRESHOLD)
-    .sort((a, b) => a.lat - b.lat);
-  if (nearbyOnSameRoad.length < 2) return null;
-  const result: number[][] = [];
-  for (let i = 0; i < nearbyOnSameRoad.length; i++) {
-    const d = nearbyOnSameRoad[i];
-    result.push([d.lng, d.lat]);
-    if (i < nearbyOnSameRoad.length - 1) {
-      const next = nearbyOnSameRoad[i + 1];
-      const distM = Math.abs(next.lat - d.lat) * 111320;
-      const steps = Math.max(1, Math.ceil(distM / 10));
-      for (let s = 1; s < steps; s++) {
-        const t = s / steps;
-        result.push([
-          d.lng + (next.lng - d.lng) * t,
-          d.lat + (next.lat - d.lat) * t,
-        ]);
-      }
-    }
-  }
-  return result;
-}
-
-/** For each sensor with flood history, walk along its nearest road. */
-function calculateAnalyticsFloodWater(
-  cachedRoads: CachedRoad[],
-  devices: Device[],
-  stats: Record<string, { count: number; totalDepth: number; maxDepth: number }>,
-): GeoJSON.Feature[] {
-  const floodingSensors = devices
-    .filter((d) => (stats[d.device_id]?.count ?? 0) > 0)
-    .map((d) => ({
-      lat: d.lat, lng: d.lng,
-      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
-      depth: stats[d.device_id].maxDepth,
-    }));
-  if (floodingSensors.length === 0) return [];
-
-  const allSensors = devices.map((d) => ({
-    lat: d.lat, lng: d.lng,
-    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
-  }));
-
-  const maxDepth = Math.max(1, ...floodingSensors.map((s) => s.depth));
-  const features: GeoJSON.Feature[] = [];
-
-  for (const sensor of floodingSensors) {
-    const cosLat = Math.cos(sensor.lat * Math.PI / 180);
-    const baseWalk = Math.min(40 + sensor.depth * 3, 200);
-
-    let bestRoad: CachedRoad | null = null;
-    let bestDist = Infinity;
-    for (const road of cachedRoads) {
-      const dist = pointToLineDist(sensor, road.geometry, cosLat);
-      if (dist < bestDist) { bestDist = dist; bestRoad = road; }
-    }
-
-    let coords: number[][] | null = null;
-    if (bestRoad && bestDist <= 120) {
-      coords =
-        bestRoad.geometry.type === "LineString" ? (bestRoad.geometry as GeoJSON.LineString).coordinates as number[][] :
-        bestRoad.geometry.type === "MultiLineString" ? (bestRoad.geometry as GeoJSON.MultiLineString).coordinates[0] as number[][] : null;
-    }
-    if (!coords || coords.length < 2) {
-      coords = buildSyntheticRoad(sensor, devices);
-    }
-    if (!coords || coords.length < 2) continue;
-
-    let nearIdx = 0, nearDist = Infinity;
-    for (let i = 0; i < coords.length; i++) {
-      const dx = (coords[i][0] - sensor.lng) * 111320 * cosLat;
-      const dy = (coords[i][1] - sensor.lat) * 111320;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      if (d < nearDist) { nearDist = d; nearIdx = i; }
-    }
-
-    const segment: number[][] = [coords[nearIdx]];
-    let dist = 0;
-    for (let i = nearIdx + 1; i < coords.length; i++) {
-      const dx = (coords[i][0] - coords[i - 1][0]) * 111320 * cosLat;
-      const dy = (coords[i][1] - coords[i - 1][1]) * 111320;
-      dist += Math.sqrt(dx * dx + dy * dy);
-      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
-      if (dist > (ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk)) break;
-      segment.push(coords[i]);
-    }
-    dist = 0;
-    for (let i = nearIdx - 1; i >= 0; i--) {
-      const dx = (coords[i][0] - coords[i + 1][0]) * 111320 * cosLat;
-      const dy = (coords[i][1] - coords[i + 1][1]) * 111320;
-      dist += Math.sqrt(dx * dx + dy * dy);
-      const ptElev = idwElevation(coords[i][1], coords[i][0], allSensors, cosLat);
-      if (dist > (ptElev < sensor.elev ? baseWalk * 1.5 : baseWalk)) break;
-      segment.unshift(coords[i]);
-    }
-    if (segment.length < 2) continue;
-
-    const intensity = Math.min(1, sensor.depth / maxDepth);
-    features.push({ type: "Feature", geometry: { type: "LineString", coordinates: segment }, properties: { intensity } });
-  }
-  return features;
-}
 
 interface Props {
   devices: Device[];
@@ -281,8 +21,6 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const devicesRef = useRef(devices);
-  const statsRef = useRef<Record<string, { count: number; totalDepth: number; maxDepth: number }>>({});
-  const cachedRoadsRef = useRef<CachedRoad[]>([]);
   devicesRef.current = devices;
 
   // Initialize map
@@ -304,19 +42,16 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     const map = mapRef.current;
 
     map.on("load", () => {
-      // Road flood water source
       map.addSource("flood-roads", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
-
-      // Sensor dots
       map.addSource("analytics-dots", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Solid flood water on streets
+      // Flood water on streets
       map.addLayer({
         id: "flood-road-water",
         type: "line",
@@ -336,7 +71,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Sensor dots layer
+      // Sensor dots
       map.addLayer({
         id: "analytics-dots-layer",
         type: "circle",
@@ -390,10 +125,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
           : floodCount <= 2 ? "Low Activity"
           : floodCount <= 5 ? "Moderate"
           : "High Activity";
-        const severityColor = floodCount === 0 ? "#34d399"
-          : floodCount <= 2 ? "#fbbf24"
-          : floodCount <= 5 ? "#f97316"
-          : "#f87171";
+        const severityColor = floodCount === 0 ? "#059669"
+          : floodCount <= 2 ? "#d97706"
+          : floodCount <= 5 ? "#c2410c"
+          : "#b91c1c";
 
         const popupHTML = `
           <div style="font-family:'DM Sans',sans-serif;min-width:200px">
@@ -407,10 +142,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:11px">
               <div><span style="color:#6b7280">Floods</span><br/><strong style="color:${severityColor}">${floodCount}</strong></div>
               <div><span style="color:#6b7280">Avg Depth</span><br/><strong>${avgDepth}cm</strong></div>
-              <div><span style="color:#6b7280">Worst</span><br/><strong style="color:${maxDepth > 30 ? '#f87171' : '#d1d5db'}">${maxDepth}cm</strong></div>
+              <div><span style="color:#6b7280">Worst</span><br/><strong style="color:${maxDepth > 30 ? '#b91c1c' : '#d1d5db'}">${maxDepth}cm</strong></div>
             </div>
             <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">
-              <div><span style="color:#6b7280">Elevation</span><br/><strong style="color:${parseFloat(props.elevation) < 1.0 ? '#fbbf24' : '#d1d5db'}">${props.elevation}m</strong></div>
+              <div><span style="color:#6b7280">Elevation</span><br/><strong style="color:${parseFloat(props.elevation) < 1.0 ? '#d97706' : '#d1d5db'}">${props.elevation}m</strong></div>
               <div><span style="color:#6b7280">Battery</span><br/><strong>${parseFloat(props.battery).toFixed(1)}V</strong></div>
             </div>
           </div>
@@ -461,11 +196,6 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       if ((e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3) deviceStats[id].compound++;
     });
 
-    const maxFloodCount = Math.max(1, ...Object.values(deviceStats).map((s) => s.count));
-
-    // Update stats ref for road query
-    statsRef.current = deviceStats;
-
     // Dot features
     const dotFeatures: GeoJSON.Feature[] = [];
 
@@ -501,21 +231,14 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Update flood water using cached road geometry + elevation physics
-    const updateFloodRoads = () => {
-      if (cachedRoadsRef.current.length === 0) {
-        cachedRoadsRef.current = queryRoadsNearDevices(map, devices);
-      }
-      const roads = calculateAnalyticsFloodWater(cachedRoadsRef.current, devices, deviceStats);
-      const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: roads });
-    };
-
-    if (cachedRoadsRef.current.length > 0) {
-      updateFloodRoads();
-    } else {
-      map.once("idle", updateFloodRoads);
+    // Build depth map from stats and calculate flood water using shared module
+    const depthMap: Record<string, number> = {};
+    for (const [id, stat] of Object.entries(deviceStats)) {
+      if (stat.count > 0) depthMap[id] = stat.maxDepth;
     }
+    const floodFeatures = calculateFloodFeatures(devices, depthMap);
+    const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+    if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: floodFeatures });
 
     // Fit bounds
     if (devices.length > 1) {
