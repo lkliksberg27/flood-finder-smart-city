@@ -89,9 +89,9 @@ export function buildFlowNetwork(
     const steepest = downhill[0].grad;
 
     // Primary flow: steepest descent (D8)
-    // Secondary flows: any path with gradient > 50% of steepest (D-infinity approx)
+    // Secondary flows: any path with gradient > 65% of steepest (D-infinity approx)
     for (const n of downhill) {
-      if (n.grad < steepest * 0.5) break;
+      if (n.grad < steepest * 0.65) break;
       const key = `${d.device_id}->${n.device.device_id}`;
       if (edgeSet.has(key)) continue;
       edgeSet.add(key);
@@ -127,23 +127,21 @@ export function computeFlowAccumulation(
     inbound[e.to].push(e.from);
   }
 
-  // Recursive accumulation with memoization
-  const cache: Record<string, number> = {};
-  function accum(id: string, visited: Set<string>): number {
-    if (cache[id] != null) return cache[id];
-    if (visited.has(id)) return 0; // cycle guard
-    visited.add(id);
-    let total = 0;
+  // Count unique upstream sensors (not flow paths) to avoid exponential counts
+  function collectUpstream(id: string, visited: Set<string>): void {
     for (const upstream of (inbound[id] ?? [])) {
-      total += 1 + accum(upstream, visited);
+      if (!visited.has(upstream)) {
+        visited.add(upstream);
+        collectUpstream(upstream, visited);
+      }
     }
-    cache[id] = total;
-    return total;
   }
 
   const result: Record<string, number> = {};
   for (const d of devices) {
-    result[d.device_id] = accum(d.device_id, new Set());
+    const upstream = new Set<string>();
+    collectUpstream(d.device_id, upstream);
+    result[d.device_id] = upstream.size;
   }
   return result;
 }
