@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device, FloodEvent } from "@/lib/types";
-import { calculateFloodFeatures } from "@/lib/golden-beach-roads";
+import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roads";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
@@ -231,14 +231,32 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    // Build depth map from stats and calculate flood water using shared module
+    // Build depth map from stats
     const depthMap: Record<string, number> = {};
     for (const [id, stat] of Object.entries(deviceStats)) {
       if (stat.count > 0) depthMap[id] = stat.maxDepth;
     }
-    const floodFeatures = calculateFloodFeatures(devices, depthMap);
+
+    // Query actual Mapbox road geometry and calculate flood water
     const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-    if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: floodFeatures });
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout>;
+
+    const updateFlood = () => {
+      if (cancelled) return;
+      const roads = queryMapboxRoads(map, devices);
+      if (roads.length === 0) return;
+      const features = calculateFloodFeatures(roads, devices, depthMap);
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+    };
+
+    updateFlood();
+    const onIdle = () => {
+      if (cancelled) return;
+      updateFlood();
+      retryTimer = setTimeout(() => { if (!cancelled) updateFlood(); }, 2000);
+    };
+    map.once("idle", onIdle);
 
     // Fit bounds
     if (devices.length > 1) {
@@ -248,6 +266,12 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     } else if (devices.length === 1) {
       map.flyTo({ center: [devices[0].lng, devices[0].lat], zoom: 16, duration: 500 });
     }
+
+    return () => {
+      cancelled = true;
+      clearTimeout(retryTimer);
+      map.off("idle", onIdle);
+    };
   }, [devices, events, floodCounts, mapReady]);
 
   return (

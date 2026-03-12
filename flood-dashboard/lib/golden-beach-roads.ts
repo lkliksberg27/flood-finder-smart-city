@@ -1,86 +1,140 @@
 /**
- * Golden Beach, FL — hardcoded road network and flood calculation.
- * Uses known street geometry so flood visualization works immediately
- * without depending on Mapbox vector tile loading timing.
+ * Flood visualization using actual Mapbox road geometry.
+ *
+ * Each sensor is on a mailbox ON a specific road. We query Mapbox's
+ * vector tiles to get the real road geometry passing through each sensor,
+ * then walk along it to show where water spreads.
  */
 import type { Device } from "./types";
+import type mapboxgl from "mapbox-gl";
 
 const COS_LAT = Math.cos(25.966 * Math.PI / 180);
-const STEP_M = 8; // densify roads with a point every ~8 meters
 
-// ── Road waypoints based on actual Golden Beach street layout ──
-// Ocean Blvd is the main N-S road; E-W cross streets connect to A1A corridor
-const RAW_ROADS: [number, number][][] = [
-  // Ocean Blvd — main N-S arterial (lng ≈ -80.11960)
-  [
-    [-80.11960, 25.95500],
-    [-80.11960, 25.95650], // FF-011 South End
-    [-80.11960, 25.95800], // FF-010 S Island Rd
-    [-80.11960, 25.95950], // FF-009 South Park
-    [-80.11960, 25.96100], // FF-008 Ravenna Ave
-    [-80.11960, 25.96250], // FF-007 NE 199th Ter
-    [-80.11960, 25.96450], // FF-006 The Strand S
-    [-80.11960, 25.96630], // FF-005 Golden Beach Dr
-    [-80.11960, 25.96800], // FF-004 The Strand N
-    [-80.11960, 25.97000], // FF-003 NE 207th Ter
-    [-80.11960, 25.97200], // FF-002 Palermo Ave
-    [-80.11960, 25.97400], // FF-001 North Park
-    [-80.11960, 25.97550],
-  ],
-  // A1A Corridor — western parallel road (lng ≈ -80.12110)
-  [
-    [-80.12110, 25.95650],
-    [-80.12110, 25.95800], // FF-019
-    [-80.12110, 25.95950], // FF-020
-    [-80.12110, 25.96100], // FF-018
-    [-80.12110, 25.96450], // FF-015
-    [-80.12110, 25.96630], // FF-012
-    [-80.12110, 25.96800], // FF-014
-    [-80.12110, 25.97200], // FF-016
-    [-80.12110, 25.97400], // FF-017
-    [-80.12110, 25.97550],
-  ],
-  // ── E-W cross streets ──
-  [[-80.11960, 25.95800], [-80.12110, 25.95800]],   // S Island Rd
-  [[-80.11960, 25.95950], [-80.12110, 25.95950]],   // South Park
-  [[-80.11960, 25.96100], [-80.12110, 25.96100]],   // Ravenna Ave
-  [[-80.11960, 25.96450], [-80.12110, 25.96450]],   // The Strand S
-  [[-80.11960, 25.96630], [-80.12110, 25.96630], [-80.12200, 25.96630]], // Golden Beach Dr
-  [[-80.11960, 25.96800], [-80.12110, 25.96800]],   // Centre Is Dr
-  [[-80.11960, 25.97200], [-80.12110, 25.97200]],   // Palermo Ave
-  [[-80.11960, 25.97400], [-80.12110, 25.97400]],   // N Pkwy
-];
-
-/** Interpolate between waypoints to create dense road coordinates */
-function densify(pts: [number, number][]): [number, number][] {
-  const out: [number, number][] = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const [x0, y0] = pts[i - 1];
-    const [x1, y1] = pts[i];
-    const dx = (x1 - x0) * 111320 * COS_LAT;
-    const dy = (y1 - y0) * 111320;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    const n = Math.max(1, Math.ceil(d / STEP_M));
-    for (let s = 1; s <= n; s++) {
-      const t = s / n;
-      out.push([x0 + (x1 - x0) * t, y0 + (y1 - y0) * t]);
-    }
-  }
-  return out;
-}
-
-// Pre-compute densified road coordinates (done once at module load)
-const ROADS = RAW_ROADS.map(densify);
-
-function ptDist(a: [number, number], b: [number, number]): number {
+function ptDist(a: number[], b: number[]): number {
   const dx = (a[0] - b[0]) * 111320 * COS_LAT;
   const dy = (a[1] - b[1]) * 111320;
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-/** IDW elevation estimate at a point using the sensor network */
+/** Overall compass direction of a polyline (degrees) */
+function lineDir(coords: number[][]): number {
+  const dx = (coords[coords.length - 1][0] - coords[0][0]) * 111320 * COS_LAT;
+  const dy = (coords[coords.length - 1][1] - coords[0][1]) * 111320;
+  return Math.atan2(dy, dx) * 180 / Math.PI;
+}
+
+/** Check if two directions are roughly collinear (same road, not a cross street) */
+function collinear(d1: number, d2: number): boolean {
+  let diff = Math.abs(d1 - d2) % 360;
+  if (diff > 180) diff = 360 - diff;
+  return diff < 50 || diff > 130; // same or opposite direction
+}
+
+/**
+ * Merge road tile fragments that share endpoints AND are going in the
+ * same direction. Prevents merging a N-S road with an E-W cross street
+ * at an intersection.
+ */
+function mergeSegments(segments: number[][][]): number[][][] {
+  if (segments.length === 0) return [];
+  const used = new Set<number>();
+  const merged: number[][][] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    if (used.has(i)) continue;
+    used.add(i);
+    let chain = [...segments[i]];
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < segments.length; j++) {
+        if (used.has(j)) continue;
+        const seg = segments[j];
+
+        // Only merge if roughly collinear (same road)
+        if (!collinear(lineDir(chain), lineDir(seg))) continue;
+
+        const chainEnd = chain[chain.length - 1];
+        const chainStart = chain[0];
+
+        if (ptDist(chainEnd, seg[0]) < 15) {
+          chain = chain.concat(seg.slice(1));
+          used.add(j); changed = true;
+        } else if (ptDist(chainEnd, seg[seg.length - 1]) < 15) {
+          chain = chain.concat([...seg].reverse().slice(1));
+          used.add(j); changed = true;
+        } else if (ptDist(chainStart, seg[seg.length - 1]) < 15) {
+          chain = seg.concat(chain.slice(1));
+          used.add(j); changed = true;
+        } else if (ptDist(chainStart, seg[0]) < 15) {
+          chain = [...seg].reverse().concat(chain.slice(1));
+          used.add(j); changed = true;
+        }
+      }
+    }
+    merged.push(chain);
+  }
+  return merged;
+}
+
+/**
+ * Query actual road geometry from Mapbox vector tiles.
+ * Queries a small area around each sensor to get the roads it's on.
+ * Merges tile fragments of the same road (direction-aware).
+ * Returns an array of road polylines (each is number[][]).
+ */
+export function queryMapboxRoads(
+  map: mapboxgl.Map,
+  devices: Device[],
+): number[][][] {
+  const style = map.getStyle();
+  if (!style?.layers) return [];
+
+  const roadLayerIds = style.layers
+    .filter((l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road")
+    .map((l) => l.id);
+  if (roadLayerIds.length === 0) return [];
+
+  const allCoords: number[][][] = [];
+  const seen = new Set<string>();
+
+  for (const device of devices) {
+    const point = map.project([device.lng, device.lat]);
+    const size = 80; // ~120m at zoom 15
+    const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
+      [point.x - size, point.y - size],
+      [point.x + size, point.y + size],
+    ];
+
+    try {
+      const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+      for (const f of features) {
+        if (f.geometry.type !== "LineString" && f.geometry.type !== "MultiLineString") continue;
+
+        const key = JSON.stringify(f.geometry).slice(0, 150);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const coords =
+          f.geometry.type === "LineString"
+            ? (f.geometry as GeoJSON.LineString).coordinates as number[][]
+            : (f.geometry as GeoJSON.MultiLineString).coordinates[0] as number[][];
+
+        if (coords && coords.length >= 2) allCoords.push(coords);
+      }
+    } catch {
+      /* tiles not loaded yet */
+    }
+  }
+
+  return mergeSegments(allCoords);
+}
+
+/** IDW elevation estimate at a point using the full sensor network */
 function idwElev(
-  lng: number, lat: number,
+  lng: number,
+  lat: number,
   sensors: { lng: number; lat: number; elev: number }[],
 ): number {
   let wE = 0, wT = 0;
@@ -95,19 +149,16 @@ function idwElev(
 }
 
 /**
- * Generate flood water GeoJSON features on actual road geometry.
+ * Calculate flood water GeoJSON features from queried road geometry.
  *
- * For each flooding sensor:
- *   1. Find all roads within 30m
- *   2. Walk along each road in both directions
- *   3. Walk distance based on depth (deeper = more spread) and elevation
- *      (water flows further downhill)
- *   4. At intersections, water naturally spreads onto cross streets
- *
- * @param devices All sensor devices
- * @param depths  device_id → flood depth (cm), only for flooding sensors
+ * For each flooding sensor, finds every road within 25m (the sensor's
+ * own road — it's on a mailbox on that road). Walks along the road in
+ * both directions; water extends further downhill based on elevation.
+ * At intersections, a sensor naturally matches multiple roads, so water
+ * spreads onto cross streets.
  */
 export function calculateFloodFeatures(
+  roads: number[][][],
   devices: Device[],
   depths: Record<string, number>,
 ): GeoJSON.Feature[] {
@@ -115,14 +166,16 @@ export function calculateFloodFeatures(
     .filter((d) => (depths[d.device_id] ?? 0) > 0)
     .map((d) => ({
       id: d.device_id,
-      pos: [d.lng, d.lat] as [number, number],
+      lng: d.lng,
+      lat: d.lat,
       elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
       depth: depths[d.device_id],
     }));
   if (flooding.length === 0) return [];
 
   const allSensors = devices.map((d) => ({
-    lng: d.lng, lat: d.lat,
+    lng: d.lng,
+    lat: d.lat,
     elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
   }));
 
@@ -130,20 +183,21 @@ export function calculateFloodFeatures(
   const features: GeoJSON.Feature[] = [];
 
   for (const sensor of flooding) {
-    // Walk distance: 30m base + 4m per cm depth, max 250m
     const walkMax = Math.min(30 + sensor.depth * 4, 250);
+    const sensorPt: number[] = [sensor.lng, sensor.lat];
 
-    for (const road of ROADS) {
-      // Find nearest point on this road
+    for (const road of roads) {
+      // Find nearest vertex on this road to the sensor
       let nearIdx = -1, nearDist = Infinity;
       for (let i = 0; i < road.length; i++) {
-        const d = ptDist(sensor.pos, road[i]);
+        const d = ptDist(sensorPt, road[i]);
         if (d < nearDist) { nearDist = d; nearIdx = i; }
       }
-      if (nearDist > 30) continue; // sensor not on this road
+      // 25m threshold — sensor must be ON this road (on a mailbox alongside it)
+      if (nearDist > 25) continue;
 
       // Walk forward along road
-      const seg: [number, number][] = [road[nearIdx]];
+      const seg: number[][] = [road[nearIdx]];
       let d = 0;
       for (let i = nearIdx + 1; i < road.length; i++) {
         d += ptDist(road[i - 1], road[i]);
