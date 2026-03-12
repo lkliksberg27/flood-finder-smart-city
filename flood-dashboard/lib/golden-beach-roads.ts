@@ -194,97 +194,109 @@ export function queryMapboxRoads(
   return merged.length > 0 ? merged : buildFallbackRoads(devices);
 }
 
-/** Flood risk at a point using IDW interpolation from sensor readings */
-function pointRisk(
-  lng: number,
-  lat: number,
-  sensors: { lng: number; lat: number; depth: number; elev: number }[],
-  maxDepth: number,
-): number {
-  let wDepth = 0, wTotal = 0;
-  let nearestDist = Infinity;
-  let nearestElev = 0;
-
-  for (const s of sensors) {
-    const dx = (s.lng - lng) * 111320 * COS_LAT;
-    const dy = (s.lat - lat) * 111320;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const w = 1 / Math.max(dist * dist, 25);
-    wDepth += s.depth * w;
-    wTotal += w;
-    if (dist < nearestDist) {
-      nearestDist = dist;
-      nearestElev = s.elev;
-    }
-  }
-
-  const interpolated = wTotal > 0 ? wDepth / wTotal : 0;
-  let risk = interpolated / maxDepth;
-
-  // Low-elevation areas near sensors get a base risk even without active flooding
-  if (nearestElev < 0.5 && nearestDist < 100) {
-    risk = Math.max(risk, 0.18);
-  } else if (nearestElev < 1.0 && nearestDist < 80) {
-    risk = Math.max(risk, 0.08);
-  }
-
-  // Fade out risk for roads far from any sensor
-  if (nearestDist > 250) risk *= 0.2;
-  else if (nearestDist > 150) risk *= 0.5;
-
-  return Math.min(1, risk);
-}
-
 /**
- * Color every road segment by flood risk (green → yellow → orange → red).
+ * Blue flood water on roads from sensor readings.
  *
- * Splits each road into ~30m segments and assigns a risk score using
- * IDW interpolation from the sensor network. Risk is based on actual
- * sensor flood depth readings and street elevation.
+ * Spread distance depends on:
+ *  - Flood depth: shallow → short spread, deep → wider spread
+ *  - Relative elevation: sensor in a LOW spot → water pools locally (less spread),
+ *    sensor HIGHER than neighbors → water flows outward (more spread)
+ *
+ * Each flooding sensor matches its nearest road and walks along it.
  */
-export function calculateRoadRiskFeatures(
+export function calculateFloodFeatures(
   roads: number[][][],
   devices: Device[],
   depths: Record<string, number>,
 ): GeoJSON.Feature[] {
-  if (devices.length === 0 || roads.length === 0) return [];
+  const flooding = devices
+    .filter((d) => (depths[d.device_id] ?? 0) > 0)
+    .map((d) => ({
+      id: d.device_id,
+      lng: d.lng,
+      lat: d.lat,
+      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+      depth: depths[d.device_id],
+    }));
+  if (flooding.length === 0) return [];
 
-  const sensors = devices.map((d) => ({
-    lng: d.lng,
-    lat: d.lat,
-    depth: depths[d.device_id] ?? 0,
-    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
-  }));
-  const maxDepth = Math.max(1, ...sensors.map((s) => s.depth));
+  // Compute average elevation for relative-elevation comparison
+  const allElevs = devices.map((d) =>
+    (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+  );
+  const avgElev = allElevs.reduce((a, b) => a + b, 0) / allElevs.length;
 
-  const SEGMENT_LEN = 30; // split roads into ~30m pieces
+  const maxDepth = Math.max(1, ...flooding.map((f) => f.depth));
   const features: GeoJSON.Feature[] = [];
 
-  for (const road of roads) {
-    if (road.length < 2) continue;
+  for (const sensor of flooding) {
+    const sensorPt: number[] = [sensor.lng, sensor.lat];
 
-    let segStart = 0;
-    let accumulated = 0;
+    // --- Spread distance based on depth + relative elevation ---
+    // Base spread: 5m per cm of depth (5cm→25m, 15cm→75m, 30cm→150m)
+    let spread = sensor.depth * 5;
 
-    for (let i = 1; i < road.length; i++) {
-      accumulated += ptDist(road[i - 1], road[i]);
+    // Relative elevation: lower than average → water pools (less spread),
+    // higher than average → water flows out (more spread)
+    const relElev = sensor.elev - avgElev;
+    if (relElev < -0.3) {
+      spread *= 0.4; // deep low spot — water stays local
+    } else if (relElev < 0) {
+      spread *= 0.7; // slightly low — moderate pooling
+    } else if (relElev > 0.3) {
+      spread *= 1.5; // higher than average — water flows outward
+    } else if (relElev > 0) {
+      spread *= 1.2; // slightly above — some extra spread
+    }
 
-      if (accumulated >= SEGMENT_LEN || i === road.length - 1) {
-        const segCoords = road.slice(segStart, i + 1);
-        if (segCoords.length >= 2) {
-          const mid = segCoords[Math.floor(segCoords.length / 2)];
-          const risk = pointRisk(mid[0], mid[1], sensors, maxDepth);
+    // Clamp to reasonable bounds
+    const MAX_WALK = Math.max(20, Math.min(200, spread));
 
-          features.push({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: segCoords },
-            properties: { risk },
-          });
+    // Find the single nearest road
+    let bestRoad: number[][] | null = null;
+    let bestDist = Infinity;
+    let bestIdx = -1;
+
+    for (const road of roads) {
+      for (let i = 0; i < road.length; i++) {
+        const d = ptDist(sensorPt, road[i]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestRoad = road;
+          bestIdx = i;
         }
-        segStart = i;
-        accumulated = 0;
       }
     }
+
+    if (!bestRoad || bestDist > 30) continue;
+
+    // Walk forward along the road
+    const seg: number[][] = [bestRoad[bestIdx]];
+    let d = 0;
+    for (let i = bestIdx + 1; i < bestRoad.length; i++) {
+      d += ptDist(bestRoad[i - 1], bestRoad[i]);
+      if (d > MAX_WALK) break;
+      seg.push(bestRoad[i]);
+    }
+
+    // Walk backward
+    d = 0;
+    for (let i = bestIdx - 1; i >= 0; i--) {
+      d += ptDist(bestRoad[i + 1], bestRoad[i]);
+      if (d > MAX_WALK) break;
+      seg.unshift(bestRoad[i]);
+    }
+
+    if (seg.length < 2) continue;
+
+    features.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: seg },
+      properties: {
+        intensity: Math.min(1, sensor.depth / maxDepth),
+        depth: sensor.depth,
+      },
+    });
   }
 
   return features;
