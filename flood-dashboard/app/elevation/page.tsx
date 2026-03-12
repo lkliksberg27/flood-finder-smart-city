@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { getAllDevices, getFloodEventCount30d } from "@/lib/queries";
-import { haversineKm, streetElevation, findRoadDips } from "@/lib/geo";
+import { streetElevation, findRoadDips } from "@/lib/geo";
 import type { Device } from "@/lib/types";
 
 const ElevationMap = dynamic(
@@ -59,7 +59,7 @@ export default function ElevationPage() {
       </div>
 
       <div className="flex gap-6">
-        <ElevationMap devices={devices} showOverlay={showOverlay} />
+        <ElevationMap devices={devices} floodCounts={floodCounts} showOverlay={showOverlay} />
 
         <div className="w-[320px] space-y-6 overflow-y-auto max-h-[calc(100vh-140px)]">
           {/* Road dips section */}
@@ -244,22 +244,24 @@ export default function ElevationPage() {
 
           {/* Legend */}
           <div className="bg-bg-card border border-border-card rounded p-3">
-            <p className="text-xs text-text-secondary mb-2">Elevation Legend</p>
-            <div className="w-full h-3 rounded" style={{
-              background: "linear-gradient(to right, #f87171, #fbbf24, #3b82f6)"
-            }} />
-            <div className="flex justify-between text-xs text-text-secondary mt-1">
-              <span>Low (flood risk)</span>
-              <span>High (safe)</span>
+            <p className="text-xs text-text-secondary mb-2">Estimated Flood Depth</p>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-xs text-text-secondary">
+                <div className="w-3 h-3 rounded-full" style={{ background: "#059669" }} />
+                <span>Low risk (&lt;5cm estimated)</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-text-secondary">
+                <div className="w-3.5 h-3.5 rounded-full" style={{ background: "#f59e0b" }} />
+                <span>Moderate risk (5-15cm estimated)</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-text-secondary">
+                <div className="w-4 h-4 rounded-full" style={{ background: "#dc2626" }} />
+                <span>High risk (&gt;15cm estimated)</span>
+              </div>
             </div>
-            <div className="flex items-center gap-2 mt-2 text-xs text-text-secondary">
-              <div className="w-8 h-0.5 border-t border-dashed border-blue-500" />
-              <span>Water flow direction</span>
-            </div>
-            <div className="flex items-center gap-2 mt-1 text-xs text-text-secondary">
-              <div className="w-4 h-4 rounded-full border-2 border-status-red" />
-              <span>Road dip detected</span>
-            </div>
+            <p className="text-xs text-text-secondary mt-3 leading-relaxed">
+              Estimates based on elevation relative to neighbors, upstream drainage flow, and 30-day flood history.
+            </p>
           </div>
         </div>
       </div>

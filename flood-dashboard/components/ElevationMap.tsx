@@ -8,29 +8,77 @@ import {
   haversineKm,
   buildFlowNetwork,
   computeFlowAccumulation,
-  type FlowEdge,
 } from "@/lib/geo";
 import type { Device } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-function elevationColor(elevation: number, min: number, max: number): string {
-  const range = max - min || 1;
-  const ratio = (elevation - min) / range;
-  if (ratio < 0.5) {
-    const t = ratio * 2;
-    return `rgb(248,${Math.round(113 + t * 74)},${Math.round(113 - t * 77)})`;
-  }
-  const t = (ratio - 0.5) * 2;
-  return `rgb(${Math.round(251 - t * 192)},${Math.round(191 - t * 61)},${Math.round(36 + t * 210)})`;
+/**
+ * Estimate flood depth risk for a sensor based on physics:
+ * - Elevation relative to neighbors (lower = more pooling)
+ * - Flow accumulation (more upstream sources = more water converges)
+ * - Historical flood frequency
+ *
+ * Returns estimated depth in cm (0 = safe, higher = more risk)
+ */
+function estimateFloodDepth(
+  device: Device,
+  allDevices: Device[],
+  accumulation: Record<string, number>,
+  floodCounts: Record<string, number>,
+): number {
+  const elev = streetElevation(device);
+
+  // Get neighbors for relative elevation
+  const neighbors = allDevices
+    .filter((n) => n.device_id !== device.device_id && n.altitude_baro != null)
+    .map((n) => ({
+      elev: streetElevation(n),
+      dist: haversineKm(device.lat, device.lng, n.lat, n.lng),
+    }))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 5);
+
+  if (neighbors.length === 0) return 0;
+
+  // Inverse-distance weighted avg neighbor elevation
+  const totalW = neighbors.reduce((s, n) => s + 1 / Math.max(n.dist, 0.01), 0);
+  const avgNeighborElev =
+    neighbors.reduce((s, n) => s + n.elev / Math.max(n.dist, 0.01), 0) /
+    totalW;
+
+  // How much lower is this sensor vs neighbors (in cm)
+  const dipCm = Math.max(0, (avgNeighborElev - elev) * 100);
+
+  // Flow accumulation: how many upstream sensors drain here
+  const accum = accumulation[device.device_id] ?? 0;
+
+  // Historical flood frequency
+  const floods = floodCounts[device.device_id] ?? 0;
+
+  // Estimated depth combines all factors:
+  // - Each cm of dip contributes ~0.8cm of potential depth
+  // - Each upstream source adds ~2cm
+  // - Each historical flood adds ~1.5cm
+  const estimated = dipCm * 0.8 + accum * 2 + floods * 1.5;
+
+  return Math.round(estimated);
+}
+
+/** Color based on estimated flood depth */
+function riskColor(depthCm: number): string {
+  if (depthCm >= 15) return "#dc2626"; // red
+  if (depthCm >= 5) return "#f59e0b"; // amber/yellow
+  return "#059669"; // green
 }
 
 interface Props {
   devices: Device[];
+  floodCounts: Record<string, number>;
   showOverlay: boolean;
 }
 
-export function ElevationMap({ devices, showOverlay }: Props) {
+export function ElevationMap({ devices, floodCounts, showOverlay }: Props) {
   const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,7 +92,7 @@ export function ElevationMap({ devices, showOverlay }: Props) {
     mapRef.current = new mapboxgl.Map({
       container: containerRef.current,
       style: "mapbox://styles/mapbox/dark-v11",
-      center: [-80.1196, 25.9660],
+      center: [-80.1196, 25.966],
       zoom: 15,
       attributionControl: false,
       pitchWithRotate: false,
@@ -53,102 +101,102 @@ export function ElevationMap({ devices, showOverlay }: Props) {
 
     const map = mapRef.current;
 
-    // Fix grey-map-on-load: resize whenever container dimensions change
     const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(containerRef.current);
 
     map.on("load", () => {
-      // Force tile rendering — nudge the map to trigger first paint
       requestAnimationFrame(() => {
         map.resize();
         map.panBy([1, 0], { duration: 0 });
         map.panBy([-1, 0], { duration: 0 });
       });
 
-      // Add empty sources
-      map.addSource("elev-flow-lines", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
-      map.addSource("elev-circles", {
+      map.addSource("elev-dots", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Water flow arrow lines — width varies by gradient steepness
+      // Sensor dots — colored by flood risk
       map.addLayer({
-        id: "elev-flow-lines-layer",
-        type: "line",
-        source: "elev-flow-lines",
+        id: "elev-dots-layer",
+        type: "circle",
+        source: "elev-dots",
         paint: {
-          "line-color": ["interpolate", ["linear"], ["get", "gradient"],
-            0.0005, "#1e40af",  // gentle slope → dark blue
-            0.003,  "#3b82f6",  // moderate slope → blue
-            0.01,   "#60a5fa",  // steep slope → bright blue
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["get", "estimatedDepth"],
+            0, 5,
+            10, 7,
+            20, 9,
+            40, 12,
           ],
-          "line-width": ["interpolate", ["linear"], ["get", "gradient"],
-            0.0005, 1,
-            0.003,  2.5,
-            0.01,   4,
-          ],
-          "line-opacity": ["interpolate", ["linear"], ["get", "gradient"],
-            0.0005, 0.2,
-            0.003,  0.45,
-            0.01,   0.7,
-          ],
-          "line-dasharray": [2, 3],
+          "circle-color": ["get", "color"],
+          "circle-stroke-width": 2,
+          "circle-stroke-color": ["get", "color"],
+          "circle-opacity": 0.85,
+          "circle-stroke-opacity": 0.4,
         },
       });
 
-      // Elevation circles — size varies by flow accumulation
+      // Labels
       map.addLayer({
-        id: "elev-circles-layer",
-        type: "circle",
-        source: "elev-circles",
+        id: "elev-labels",
+        type: "symbol",
+        source: "elev-dots",
+        layout: {
+          "text-field": ["concat", "~", ["get", "estimatedDepth"], "cm"],
+          "text-size": 10,
+          "text-offset": [0, 1.8],
+          "text-anchor": "top",
+          "text-allow-overlap": false,
+        },
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["get", "accumulation"],
-            0, 16,
-            2, 20,
-            5, 26,
-            10, 32,
-          ],
-          "circle-color": ["get", "color"],
-          "circle-opacity": 0.55,
-          "circle-stroke-width": ["case", ["==", ["get", "isDip"], true], 2, 0],
-          "circle-stroke-color": ["case", ["==", ["get", "isDip"], true], "#f87171", "transparent"],
+          "text-color": "#9ca3af",
+          "text-halo-color": "#111827",
+          "text-halo-width": 1,
         },
       });
 
       setMapReady(true);
 
-      // Click handler for popups
-      map.on("click", "elev-circles-layer", (e) => {
+      // Click popup
+      map.on("click", "elev-dots-layer", (e) => {
         if (!e.features?.[0]) return;
         const props = e.features[0].properties!;
-        const coords = (e.features[0].geometry as GeoJSON.Point).coordinates.slice() as [number, number];
+        const coords = (
+          e.features[0].geometry as GeoJSON.Point
+        ).coordinates.slice() as [number, number];
 
-        const riskColor =
-          props.drainageRisk === "critical" ? "#dc2626" :
-          props.drainageRisk === "high" ? "#f59e0b" :
-          props.drainageRisk === "moderate" ? "#3b82f6" : "#059669";
+        const riskLabel =
+          parseFloat(props.estimatedDepth) >= 15
+            ? "HIGH RISK"
+            : parseFloat(props.estimatedDepth) >= 5
+              ? "MODERATE"
+              : "LOW RISK";
+        const riskBg =
+          parseFloat(props.estimatedDepth) >= 15
+            ? "rgba(220,38,38,0.15)"
+            : parseFloat(props.estimatedDepth) >= 5
+              ? "rgba(245,158,11,0.15)"
+              : "rgba(5,150,105,0.15)";
 
         const popupHTML = `
           <div style="font-family:'DM Sans',sans-serif;min-width:180px">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <strong>${props.device_id}</strong>
-              ${props.isDip ? '<span style="font-size:10px;color:#f87171;background:rgba(248,113,113,0.15);padding:1px 6px;border-radius:4px;font-weight:600">ROAD DIP</span>' : ''}
+              <span style="font-size:10px;color:${props.color};background:${riskBg};padding:1px 6px;border-radius:4px;font-weight:600">${riskLabel}</span>
             </div>
-            ${props.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${props.name}</div>` : ''}
+            ${props.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${props.name}</div>` : ""}
             <hr style="border-color:#1f2937;margin:6px 0"/>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">
-              <div><span style="color:#6b7280">Street Elev.</span><br/><strong>${props.elevation}m</strong></div>
-              <div><span style="color:#6b7280">Avg Neighbors</span><br/><strong>${props.avgNeighborElev}m</strong></div>
-              <div><span style="color:#6b7280">Upstream Sources</span><br/><strong>${props.accumulation}</strong></div>
-              <div><span style="color:#6b7280">Drainage Risk</span><br/><strong style="color:${riskColor}">${(props.drainageRisk || 'low').toUpperCase()}</strong></div>
+              <div><span style="color:#6b7280">Elevation</span><br/><strong>${props.elevation}m</strong></div>
+              <div><span style="color:#6b7280">Est. Depth</span><br/><strong style="color:${props.color}">~${props.estimatedDepth}cm</strong></div>
+              <div><span style="color:#6b7280">Upstream</span><br/><strong>${props.flowAccum} sources</strong></div>
+              <div><span style="color:#6b7280">Floods/30d</span><br/><strong>${props.floodCount}</strong></div>
             </div>
-            ${props.isDip ? `<div style="margin-top:6px;font-size:11px;color:#f87171;font-weight:600">${props.dipCm}cm below surrounding road level</div>` : ''}
-            ${Number(props.accumulation) > 0 ? `<div style="margin-top:4px;font-size:10px;color:#6b7280">${props.accumulation} sensor${Number(props.accumulation) > 1 ? 's' : ''} drain into this location</div>` : ''}
-            ${props.neighborhood ? `<div style="margin-top:4px;font-size:10px;color:#6b7280">${props.neighborhood}</div>` : ''}
+            ${props.isDip === "true" ? `<div style="margin-top:6px;font-size:11px;color:#f87171;font-weight:600">${props.dipCm}cm below surrounding road</div>` : ""}
+            ${props.neighborhood ? `<div style="margin-top:4px;font-size:10px;color:#6b7280">${props.neighborhood}</div>` : ""}
           </div>
         `;
 
@@ -158,10 +206,10 @@ export function ElevationMap({ devices, showOverlay }: Props) {
           .addTo(map);
       });
 
-      map.on("mouseenter", "elev-circles-layer", () => {
+      map.on("mouseenter", "elev-dots-layer", () => {
         map.getCanvas().style.cursor = "pointer";
       });
-      map.on("mouseleave", "elev-circles-layer", () => {
+      map.on("mouseleave", "elev-dots-layer", () => {
         map.getCanvas().style.cursor = "";
       });
     });
@@ -174,80 +222,58 @@ export function ElevationMap({ devices, showOverlay }: Props) {
     };
   }, []);
 
-  // Update data when devices/showOverlay change
+  // Update data
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
 
-    const flowSrc = map.getSource("elev-flow-lines") as mapboxgl.GeoJSONSource | undefined;
-    const circSrc = map.getSource("elev-circles") as mapboxgl.GeoJSONSource | undefined;
+    const dotSrc = map.getSource("elev-dots") as
+      | mapboxgl.GeoJSONSource
+      | undefined;
 
     if (!showOverlay || devices.length === 0) {
-      flowSrc?.setData({ type: "FeatureCollection", features: [] });
-      circSrc?.setData({ type: "FeatureCollection", features: [] });
+      dotSrc?.setData({ type: "FeatureCollection", features: [] });
       return;
     }
 
     const withElev = devices.filter((d) => d.altitude_baro != null);
     if (withElev.length === 0) {
-      flowSrc?.setData({ type: "FeatureCollection", features: [] });
-      circSrc?.setData({ type: "FeatureCollection", features: [] });
+      dotSrc?.setData({ type: "FeatureCollection", features: [] });
       return;
     }
 
-    // Use streetElevation (accounts for sensor mounting height)
-    const elevations = withElev.map((d) => streetElevation(d));
-    const min = Math.min(...elevations);
-    const max = Math.max(...elevations);
-
-    // Build proper flow network with gradient-based routing
-    const edges: FlowEdge[] = buildFlowNetwork(devices);
+    // Build flow network for accumulation
+    const edges = buildFlowNetwork(devices);
     const accumulation = computeFlowAccumulation(devices, edges);
 
-    // Build flow lines from the network edges (gradient-weighted)
-    const deviceMap = new Map(withElev.map((d) => [d.device_id, d]));
-    const lineFeatures: GeoJSON.Feature[] = [];
-    for (const edge of edges) {
-      const from = deviceMap.get(edge.from);
-      const to = deviceMap.get(edge.to);
-      if (!from || !to) continue;
-      lineFeatures.push({
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: [[from.lng, from.lat], [to.lng, to.lat]],
-        },
-        properties: {
-          gradient: edge.gradient,
-          elevDrop: edge.elevDrop,
-        },
-      });
-    }
-
-    // Build circle features with flow accumulation and proper streetElevation
-    const circleFeatures: GeoJSON.Feature[] = withElev.map((d) => {
+    // Sensor dots with estimated flood depth
+    const dotFeatures: GeoJSON.Feature[] = withElev.map((d) => {
       const elev = streetElevation(d);
-      const color = elevationColor(elev, min, max);
-      const accum = accumulation[d.device_id] ?? 0;
+      const estDepth = estimateFloodDepth(d, devices, accumulation, floodCounts);
+      const color = riskColor(estDepth);
 
-      // IDW neighbor elevation for dip detection
+      // Compute neighbor avg for popup
       const neighbors = withElev
         .filter((n) => n.device_id !== d.device_id)
-        .map((n) => ({ ...n, elev: streetElevation(n), dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
+        .map((n) => ({
+          elev: streetElevation(n),
+          dist: haversineKm(d.lat, d.lng, n.lat, n.lng),
+        }))
         .sort((a, b) => a.dist - b.dist)
         .slice(0, 4);
-
-      const totalWeight = neighbors.reduce((s, n) => s + 1 / Math.max(n.dist, 0.01), 0);
-      const avgNeighborElev = neighbors.reduce((s, n) => s + (n.elev / Math.max(n.dist, 0.01)), 0) / totalWeight;
-      const isDip = (elev - avgNeighborElev) < -0.08;
-
-      // Drainage risk
+      const totalW = neighbors.reduce(
+        (s, n) => s + 1 / Math.max(n.dist, 0.01),
+        0,
+      );
+      const avgNeighborElev =
+        neighbors.length > 0
+          ? neighbors.reduce(
+              (s, n) => s + n.elev / Math.max(n.dist, 0.01),
+              0,
+            ) / totalW
+          : elev;
+      const isDip = elev - avgNeighborElev < -0.08;
       const dipCm = isDip ? Math.round((avgNeighborElev - elev) * 100) : 0;
-      const riskScore = dipCm * 0.4 + accum * 8;
-      const drainageRisk =
-        riskScore > 40 ? 'critical' :
-        riskScore > 20 ? 'high' :
-        riskScore > 10 ? 'moderate' : 'low';
 
       return {
         type: "Feature" as const,
@@ -257,30 +283,34 @@ export function ElevationMap({ devices, showOverlay }: Props) {
           name: d.name ?? "",
           neighborhood: d.neighborhood ?? "",
           color,
-          isDip,
           elevation: elev.toFixed(2),
-          avgNeighborElev: avgNeighborElev.toFixed(2),
+          estimatedDepth: estDepth,
+          flowAccum: accumulation[d.device_id] ?? 0,
+          floodCount: floodCounts[d.device_id] ?? 0,
+          isDip: isDip ? "true" : "false",
           dipCm,
-          accumulation: accum,
-          drainageRisk,
         },
       };
     });
+    dotSrc?.setData({ type: "FeatureCollection", features: dotFeatures });
 
-    flowSrc?.setData({ type: "FeatureCollection", features: lineFeatures });
-    circSrc?.setData({ type: "FeatureCollection", features: circleFeatures });
-
-    // Auto-fit
-    if (withElev.length > 1 && map.getZoom() === 15) {
+    // Fit bounds
+    if (withElev.length > 1) {
       const bounds = new mapboxgl.LngLatBounds();
       withElev.forEach((d) => bounds.extend([d.lng, d.lat]));
-      map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+      map.fitBounds(bounds, { padding: 60, maxZoom: 16, duration: 500 });
     }
-  }, [devices, showOverlay, mapReady]);
+  }, [devices, floodCounts, showOverlay, mapReady]);
 
   return (
-    <div className="flex-1 h-[calc(100vh-140px)] rounded-lg overflow-hidden border border-border-card" style={{ position: "relative" }}>
-      <div ref={containerRef} style={{ height: "100%", width: "100%", borderRadius: "8px" }} />
+    <div
+      className="flex-1 h-[calc(100vh-140px)] rounded-lg overflow-hidden border border-border-card"
+      style={{ position: "relative" }}
+    >
+      <div
+        ref={containerRef}
+        style={{ height: "100%", width: "100%", borderRadius: "8px" }}
+      />
     </div>
   );
 }

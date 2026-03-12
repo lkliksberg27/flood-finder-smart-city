@@ -146,56 +146,6 @@ export function computeFlowAccumulation(
   return result;
 }
 
-/**
- * Estimate flood spread distance using simplified Manning's equation.
- *
- * V = (1/n) * R^(2/3) * S^(1/2)   where:
- *   n = Manning's roughness (0.013 for asphalt road)
- *   R = hydraulic radius ≈ depth for wide shallow flow (meters)
- *   S = longitudinal slope (dimensionless)
- *
- * Spread = velocity * characteristic_time (how far water travels
- * in the time it takes to drain or be absorbed).
- * For shallow urban flooding on flat terrain, we use a simplified
- * approach: spread ∝ depth * sqrt(slope) / roughness.
- *
- * On very flat terrain (S < 0.001), water pools instead of flowing,
- * so we cap the minimum slope and reduce spread for pooling.
- */
-export function manningSpreadEstimate(
-  depthCm: number,
-  slopeToNeighbor: number,
-  flowAccum: number,
-): number {
-  const n = 0.013; // Manning's n for asphalt
-  const depthM = depthCm / 100;
-
-  // Effective slope: use at least 0.001 (1mm/m) for completely flat terrain
-  const S = Math.max(0.001, Math.abs(slopeToNeighbor));
-
-  // Simplified Manning velocity (m/s) for sheet flow
-  const velocity = (1 / n) * Math.pow(depthM, 2 / 3) * Math.sqrt(S);
-
-  // Characteristic drain time: ~60s for shallow flow, longer for deeper
-  const drainTime = 30 + depthCm * 2;
-
-  // Base spread from velocity * time
-  let spread = velocity * drainTime;
-
-  // Flat terrain pooling: if slope < 0.002, water pools more locally
-  if (S < 0.002) {
-    spread *= 0.4 + (S / 0.002) * 0.6; // scale down to 40% on dead-flat ground
-  }
-
-  // Flow accumulation bonus: convergence zones spread further
-  // Each upstream contributor adds ~15% spread (diminishing)
-  const accumFactor = 1 + Math.log2(1 + flowAccum) * 0.15;
-  spread *= accumFactor;
-
-  // Clamp to reasonable bounds (15m–250m)
-  return Math.max(15, Math.min(250, spread));
-}
-
 // ─── Road dip analysis ───────────────────────────────────────────
 
 /** Analyze road dips — sensors sitting lower than their neighbors */

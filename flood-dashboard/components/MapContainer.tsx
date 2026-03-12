@@ -377,42 +377,36 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
-    // Query actual Mapbox road geometry and calculate flood water
-    let cancelled = false;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-
-    const updateFlood = () => {
-      if (cancelled) return false;
-      const roads = queryMapboxRoads(map, devices);
-      if (roads.length === 0) return false;
-      const features = calculateFloodFeatures(roads, devices, depths);
-      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
-      return features.length > 0;
-    };
-
-    // Fit bounds on initial load (before flood calc so viewport is correct)
+    // Fit bounds
     if (devices.length > 0 && map.getZoom() === 15) {
       const bounds = new mapboxgl.LngLatBounds();
       devices.forEach((d) => bounds.extend([d.lng, d.lat]));
       map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
     }
 
-    // Retry flood calc every 1.5s until it succeeds (max 8 attempts)
-    let attempts = 0;
-    const tryFlood = () => {
-      if (cancelled || attempts >= 8) return;
-      attempts++;
-      const ok = updateFlood();
-      if (!ok) {
-        timers.push(setTimeout(tryFlood, 1500));
-      }
+    // Query road geometry and calculate flood water
+    let cancelled = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    const updateFlood = () => {
+      if (cancelled) return;
+      const roads = queryMapboxRoads(map, devices);
+      if (roads.length === 0) return;
+      const features = calculateFloodFeatures(roads, devices, depths);
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
     };
-    // Start after a short delay to let fitBounds/tiles settle
-    timers.push(setTimeout(tryFlood, 500));
+
+    // Run immediately with fallback roads, then re-run when tiles load
+    updateFlood();
+    const onIdle = () => { if (!cancelled) updateFlood(); };
+    map.once("idle", onIdle);
+    // One more retry after tiles have had time to fully load
+    timers.push(setTimeout(() => { if (!cancelled) updateFlood(); }, 3000));
 
     return () => {
       cancelled = true;
       timers.forEach(clearTimeout);
+      map.off("idle", onIdle);
     };
   }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
