@@ -1,11 +1,12 @@
 /**
  * Flood visualization using actual Mapbox road geometry ONLY.
  *
- * No synthetic/fallback roads. No extrapolation past road ends.
- * Water stays strictly on real road geometry from Mapbox vector tiles.
+ * No synthetic roads. No merging across gaps. No extrapolation.
+ * Each road segment from Mapbox tiles is walked independently.
+ * Water NEVER crosses non-road areas.
  *
  * Physics: H_water = H_sensor + depth.
- * Walk along actual road while H_ground <= H_water.
+ * Walk along each tile road segment while H_ground <= H_water.
  */
 import type { Device } from "./types";
 import type mapboxgl from "mapbox-gl";
@@ -21,67 +22,15 @@ function ptDist(a: number[], b: number[]): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-function lineDir(coords: number[][]): number {
-  const lat = (coords[0][1] + coords[coords.length - 1][1]) / 2;
-  const dx =
-    (coords[coords.length - 1][0] - coords[0][0]) * 111320 * cosLat(lat);
-  const dy = (coords[coords.length - 1][1] - coords[0][1]) * 111320;
-  return (Math.atan2(dy, dx) * 180) / Math.PI;
-}
-
-function collinear(d1: number, d2: number): boolean {
-  let diff = Math.abs(d1 - d2) % 360;
-  if (diff > 180) diff = 360 - diff;
-  return diff < 50 || diff > 130;
-}
-
-function mergeSegments(segments: number[][][]): number[][][] {
-  if (segments.length === 0) return [];
-  const used = new Set<number>();
-  const merged: number[][][] = [];
-
-  for (let i = 0; i < segments.length; i++) {
-    if (used.has(i)) continue;
-    used.add(i);
-    let chain = [...segments[i]];
-    let changed = true;
-
-    while (changed) {
-      changed = false;
-      for (let j = 0; j < segments.length; j++) {
-        if (used.has(j)) continue;
-        const seg = segments[j];
-        if (!collinear(lineDir(chain), lineDir(seg))) continue;
-
-        const chainEnd = chain[chain.length - 1];
-        const chainStart = chain[0];
-
-        if (ptDist(chainEnd, seg[0]) < 20) {
-          chain = chain.concat(seg.slice(1));
-          used.add(j);
-          changed = true;
-        } else if (ptDist(chainEnd, seg[seg.length - 1]) < 20) {
-          chain = chain.concat([...seg].reverse().slice(1));
-          used.add(j);
-          changed = true;
-        } else if (ptDist(chainStart, seg[seg.length - 1]) < 20) {
-          chain = seg.concat(chain.slice(1));
-          used.add(j);
-          changed = true;
-        } else if (ptDist(chainStart, seg[0]) < 20) {
-          chain = [...seg].reverse().concat(chain.slice(1));
-          used.add(j);
-          changed = true;
-        }
-      }
-    }
-    merged.push(chain);
-  }
-  return merged;
+function dedupKey(coords: number[][]): string {
+  const s = coords[0];
+  const e = coords[coords.length - 1];
+  return `${s[0].toFixed(6)},${s[1].toFixed(6)}-${e[0].toFixed(6)},${e[1].toFixed(6)}`;
 }
 
 /**
- * Query ONLY real road geometry from Mapbox vector tiles.
+ * Query real road geometry from Mapbox vector tiles.
+ * Returns raw tile segments — NO merging, so lines never jump across water.
  * Returns empty array if tiles aren't loaded yet — caller should retry.
  */
 export function queryMapboxRoads(
@@ -105,7 +54,8 @@ export function queryMapboxRoads(
 
   for (const device of devices) {
     const point = map.project([device.lng, device.lat]);
-    const size = 300;
+    // Tight bbox — only roads actually near the sensor, not across waterways
+    const size = 100;
     const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
       [point.x - size, point.y - size],
       [point.x + size, point.y + size],
@@ -116,35 +66,34 @@ export function queryMapboxRoads(
         layers: roadLayerIds,
       });
       for (const f of features) {
-        if (
-          f.geometry.type !== "LineString" &&
-          f.geometry.type !== "MultiLineString"
-        )
-          continue;
-
-        const coords =
-          f.geometry.type === "LineString"
-            ? ((f.geometry as GeoJSON.LineString).coordinates as number[][])
-            : ((f.geometry as GeoJSON.MultiLineString)
-                .coordinates[0] as number[][]);
-
-        if (!coords || coords.length < 2) continue;
-
-        // Dedup by rounded start+end coords
-        const s = coords[0];
-        const e = coords[coords.length - 1];
-        const key = `${s[0].toFixed(6)},${s[1].toFixed(6)}-${e[0].toFixed(6)},${e[1].toFixed(6)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        allCoords.push(coords);
+        if (f.geometry.type === "LineString") {
+          const coords = (f.geometry as GeoJSON.LineString)
+            .coordinates as number[][];
+          if (!coords || coords.length < 2) continue;
+          const key = dedupKey(coords);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          allCoords.push(coords);
+        } else if (f.geometry.type === "MultiLineString") {
+          // Handle ALL parts, not just the first
+          const multi = (f.geometry as GeoJSON.MultiLineString)
+            .coordinates as number[][][];
+          for (const coords of multi) {
+            if (!coords || coords.length < 2) continue;
+            const key = dedupKey(coords);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            allCoords.push(coords);
+          }
+        }
       }
     } catch {
       /* tiles not loaded yet */
     }
   }
 
-  return mergeSegments(allCoords);
+  // Return raw segments — NO merging. Each tile segment is a valid road piece.
+  return allCoords;
 }
 
 /**
@@ -171,9 +120,12 @@ function estimateElevation(
 /**
  * Flood water strictly on actual road geometry.
  *
+ * For each flooding sensor, walk along EVERY nearby road segment
+ * independently. Never jump between segments. Water stays on
+ * exactly the Mapbox tile geometry it came from.
+ *
  * H_water = H_sensor + depth.
- * Walk along real road while H_ground <= H_water.
- * No fallbacks, no extrapolation, no synthetic lines.
+ * Walk while H_ground <= H_water.
  */
 export function calculateFloodFeatures(
   roads: number[][][],
@@ -201,111 +153,103 @@ export function calculateFloodFeatures(
 
   const maxDepth = Math.max(1, ...flooding.map((f) => f.depth));
   const features: GeoJSON.Feature[] = [];
-
   const MAX_WALK = 300;
 
   for (const sensor of flooding) {
     const sensorPt: number[] = [sensor.lng, sensor.lat];
     const H_water = sensor.elev + sensor.depth / 100;
 
-    // Find nearest road vertex
-    let bestRoad: number[][] | null = null;
-    let bestDist = Infinity;
-    let bestIdx = -1;
-
+    // Walk each nearby road INDEPENDENTLY — never cross between roads
     for (const road of roads) {
+      // Find closest vertex on THIS specific road
+      let closestIdx = -1;
+      let closestDist = Infinity;
       for (let i = 0; i < road.length; i++) {
         const d = ptDist(sensorPt, road[i]);
-        if (d < bestDist) {
-          bestDist = d;
-          bestRoad = road;
-          bestIdx = i;
+        if (d < closestDist) {
+          closestDist = d;
+          closestIdx = i;
         }
       }
-    }
 
-    // Must be within 50m of an actual road — otherwise skip
-    if (!bestRoad || bestDist > 50) continue;
+      // Skip roads more than 30m from sensor
+      if (closestDist > 30) continue;
 
-    // Walk forward along actual road geometry
-    const seg: number[][] = [bestRoad[bestIdx]];
-    let fwdDist = 0;
-    for (let i = bestIdx + 1; i < bestRoad.length && fwdDist < MAX_WALK; i++) {
-      const stepDist = ptDist(bestRoad[i - 1], bestRoad[i]);
-      fwdDist += stepDist;
+      // Walk forward along THIS road only
+      const seg: number[][] = [road[closestIdx]];
+      let fwdDist = 0;
+      for (let i = closestIdx + 1; i < road.length && fwdDist < MAX_WALK; i++) {
+        const stepDist = ptDist(road[i - 1], road[i]);
+        fwdDist += stepDist;
 
-      const H_ground = estimateElevation(
-        bestRoad[i][0],
-        bestRoad[i][1],
-        elevSensors,
-      );
-
-      // Stop at flood boundary — but always include at least 40m
-      if (H_ground > H_water && fwdDist > 40) {
-        // Interpolate boundary point on this road segment
-        const prevH = estimateElevation(
-          bestRoad[i - 1][0],
-          bestRoad[i - 1][1],
+        const H_ground = estimateElevation(
+          road[i][0],
+          road[i][1],
           elevSensors,
         );
-        const rise = H_ground - prevH;
-        if (rise > 0.001) {
-          const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
-          seg.push([
-            bestRoad[i - 1][0] +
-              (bestRoad[i][0] - bestRoad[i - 1][0]) * frac,
-            bestRoad[i - 1][1] +
-              (bestRoad[i][1] - bestRoad[i - 1][1]) * frac,
-          ]);
+
+        // Stop at flood boundary — but always include at least 40m
+        if (H_ground > H_water && fwdDist > 40) {
+          const prevH = estimateElevation(
+            road[i - 1][0],
+            road[i - 1][1],
+            elevSensors,
+          );
+          const rise = H_ground - prevH;
+          if (rise > 0.001) {
+            const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
+            seg.push([
+              road[i - 1][0] + (road[i][0] - road[i - 1][0]) * frac,
+              road[i - 1][1] + (road[i][1] - road[i - 1][1]) * frac,
+            ]);
+          }
+          break;
         }
-        break;
+        seg.push(road[i]);
       }
-      seg.push(bestRoad[i]);
-    }
 
-    // Walk backward along actual road geometry
-    let bwdDist = 0;
-    for (let i = bestIdx - 1; i >= 0 && bwdDist < MAX_WALK; i--) {
-      const stepDist = ptDist(bestRoad[i + 1], bestRoad[i]);
-      bwdDist += stepDist;
+      // Walk backward along THIS road only
+      let bwdDist = 0;
+      for (let i = closestIdx - 1; i >= 0 && bwdDist < MAX_WALK; i--) {
+        const stepDist = ptDist(road[i + 1], road[i]);
+        bwdDist += stepDist;
 
-      const H_ground = estimateElevation(
-        bestRoad[i][0],
-        bestRoad[i][1],
-        elevSensors,
-      );
-
-      if (H_ground > H_water && bwdDist > 40) {
-        const prevH = estimateElevation(
-          bestRoad[i + 1][0],
-          bestRoad[i + 1][1],
+        const H_ground = estimateElevation(
+          road[i][0],
+          road[i][1],
           elevSensors,
         );
-        const rise = H_ground - prevH;
-        if (rise > 0.001) {
-          const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
-          seg.unshift([
-            bestRoad[i + 1][0] +
-              (bestRoad[i][0] - bestRoad[i + 1][0]) * frac,
-            bestRoad[i + 1][1] +
-              (bestRoad[i][1] - bestRoad[i + 1][1]) * frac,
-          ]);
+
+        if (H_ground > H_water && bwdDist > 40) {
+          const prevH = estimateElevation(
+            road[i + 1][0],
+            road[i + 1][1],
+            elevSensors,
+          );
+          const rise = H_ground - prevH;
+          if (rise > 0.001) {
+            const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
+            seg.unshift([
+              road[i + 1][0] + (road[i][0] - road[i + 1][0]) * frac,
+              road[i + 1][1] + (road[i][1] - road[i + 1][1]) * frac,
+            ]);
+          }
+          break;
         }
-        break;
+        seg.unshift(road[i]);
       }
-      seg.unshift(bestRoad[i]);
+
+      if (seg.length < 2) continue;
+
+      features.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: seg },
+        properties: {
+          intensity: Math.min(1, Math.max(0.15, sensor.depth / maxDepth)),
+          depth: sensor.depth,
+        },
+      });
     }
-
-    if (seg.length < 2) continue;
-
-    features.push({
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: seg },
-      properties: {
-        intensity: Math.min(1, Math.max(0.15, sensor.depth / maxDepth)),
-        depth: sensor.depth,
-      },
-    });
   }
 
   return features;
