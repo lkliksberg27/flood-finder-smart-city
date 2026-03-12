@@ -379,39 +379,40 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     // Query actual Mapbox road geometry and calculate flood water
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout>;
+    const timers: ReturnType<typeof setTimeout>[] = [];
 
     const updateFlood = () => {
       if (cancelled) return;
       const roads = queryMapboxRoads(map, devices);
-      if (roads.length === 0) return; // tiles not loaded yet
+      if (roads.length === 0) return false; // tiles not loaded yet
       const features = calculateFloodFeatures(roads, devices, depths);
       if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+      return features.length > 0;
     };
 
-    // Try immediately (works if tiles are cached)
-    updateFlood();
-
-    // Retry after tiles load — idle fires when map finishes rendering
-    const onIdle = () => {
-      if (cancelled) return;
-      updateFlood();
-      // One more backup try 2s later
-      retryTimer = setTimeout(() => { if (!cancelled) updateFlood(); }, 2000);
-    };
-    map.once("idle", onIdle);
-
-    // Fit bounds on initial load
+    // Fit bounds on initial load (before flood calc so viewport is correct)
     if (devices.length > 0 && map.getZoom() === 15) {
       const bounds = new mapboxgl.LngLatBounds();
       devices.forEach((d) => bounds.extend([d.lng, d.lat]));
       map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
     }
 
+    // Retry flood calc every 1.5s until it succeeds (max 8 attempts)
+    let attempts = 0;
+    const tryFlood = () => {
+      if (cancelled || attempts >= 8) return;
+      attempts++;
+      const ok = updateFlood();
+      if (!ok) {
+        timers.push(setTimeout(tryFlood, 1500));
+      }
+    };
+    // Start after a short delay to let fitBounds/tiles settle
+    timers.push(setTimeout(tryFlood, 500));
+
     return () => {
       cancelled = true;
-      clearTimeout(retryTimer);
-      map.off("idle", onIdle);
+      timers.forEach(clearTimeout);
     };
   }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
