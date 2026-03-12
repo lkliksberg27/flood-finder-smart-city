@@ -73,7 +73,12 @@ export default function ElevationPage() {
                 Sensors sitting lower than their neighbors — water naturally pools here.
               </p>
               <div className="space-y-2">
-                {dips.slice(0, 8).map((d) => (
+                {dips.slice(0, 8).map((d) => {
+                const riskColor =
+                  d.drainageRisk === "critical" ? "text-status-red" :
+                  d.drainageRisk === "high" ? "text-status-amber" :
+                  d.drainageRisk === "moderate" ? "text-status-blue" : "text-status-green";
+                return (
                   <div key={d.device_id} className="bg-bg-card border border-border-card rounded p-3">
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-mono">{d.device_id}</span>
@@ -96,6 +101,14 @@ export default function ElevationPage() {
                       <span>Elev: {d.elevation_m.toFixed(2)}m</span>
                       <span>Avg neighbors: {d.avgNeighborElev}m</span>
                     </div>
+                    <div className="mt-1 flex justify-between text-xs">
+                      <span className="text-text-secondary">
+                        {d.flowAccumulation > 0 ? `${d.flowAccumulation} upstream source${d.flowAccumulation > 1 ? 's' : ''}` : 'No upstream flow'}
+                      </span>
+                      <span className={`font-medium ${riskColor}`}>
+                        {d.drainageRisk.toUpperCase()}
+                      </span>
+                    </div>
                     {/* Visual dip indicator */}
                     <div className="mt-2 h-2 bg-bg-primary rounded overflow-hidden">
                       <div
@@ -104,7 +117,8 @@ export default function ElevationPage() {
                       />
                     </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
             </div>
           )}

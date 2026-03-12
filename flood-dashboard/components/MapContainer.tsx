@@ -7,6 +7,7 @@ import type { Device } from "@/lib/types";
 import { getReadings24h } from "@/lib/queries";
 import { getSupabase } from "@/lib/supabase";
 import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roads";
+import { buildFlowNetwork, computeFlowAccumulation } from "@/lib/geo";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
@@ -377,6 +378,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
+    // Compute flow accumulation for slope-aware flood spread
+    const flowEdges = buildFlowNetwork(devices);
+    const flowAccum = computeFlowAccumulation(devices, flowEdges);
+
     // Query actual Mapbox road geometry and calculate flood water
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -385,7 +390,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       if (cancelled) return false;
       const roads = queryMapboxRoads(map, devices);
       if (roads.length === 0) return false;
-      const features = calculateFloodFeatures(roads, devices, depths);
+      const features = calculateFloodFeatures(roads, devices, depths, flowAccum);
       if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
       return features.length > 0;
     };
