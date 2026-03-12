@@ -8,6 +8,12 @@ import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roa
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
+const STATUS_COLORS: Record<string, string> = {
+  online: "#059669",
+  alert: "#dc2626",
+  offline: "#4b5563",
+};
+
 interface Props {
   devices: Device[];
   events: FloodEvent[];
@@ -50,6 +56,10 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
+      map.addSource("analytics-alerts", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
 
       // Flood water on streets
       map.addLayer({
@@ -71,6 +81,18 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
+      // Alert rings
+      map.addLayer({
+        id: "analytics-alert-rings",
+        type: "circle",
+        source: "analytics-alerts",
+        paint: {
+          "circle-radius": 16,
+          "circle-color": "#b91c1c",
+          "circle-opacity": 0.1,
+        },
+      });
+
       // Sensor dots
       map.addLayer({
         id: "analytics-dots-layer",
@@ -78,15 +100,13 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         source: "analytics-dots",
         paint: {
           "circle-radius": ["case",
-            [">=", ["get", "floodCount"], 8], 10,
-            [">=", ["get", "floodCount"], 3], 8,
-            [">=", ["get", "floodCount"], 1], 7,
-            6,
+            ["==", ["get", "status"], "alert"], 7,
+            5,
           ],
           "circle-color": ["get", "color"],
-          "circle-stroke-width": 2,
-          "circle-stroke-color": ["get", "strokeColor"],
-          "circle-opacity": 0.9,
+          "circle-stroke-width": 1,
+          "circle-stroke-color": ["get", "color"],
+          "circle-opacity": 0.8,
         },
       });
 
@@ -178,6 +198,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     if (!map || !mapReady) return;
 
     const dotSrc = map.getSource("analytics-dots") as mapboxgl.GeoJSONSource | undefined;
+    const alertSrc = map.getSource("analytics-alerts") as mapboxgl.GeoJSONSource | undefined;
     if (!dotSrc) return;
 
     if (devices.length === 0) {
@@ -203,13 +224,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       const stats = deviceStats[d.device_id] ?? { count: 0, totalDepth: 0, maxDepth: 0, compound: 0 };
       const avgDepth = stats.count > 0 ? Math.round(stats.totalDepth / stats.count) : 0;
 
-      let color: string;
-      let strokeColor: string;
-      if (stats.count === 0) { color = "#059669"; strokeColor = "#064e3b"; }
-      else if (stats.count <= 2) { color = "#d97706"; strokeColor = "#78350f"; }
-      else if (stats.count <= 5) { color = "#c2410c"; strokeColor = "#7c2d12"; }
-      else { color = "#b91c1c"; strokeColor = "#7f1d1d"; }
-      if (stats.compound > 0) strokeColor = "#dc2626";
+      const color = STATUS_COLORS[d.status] ?? "#6b7280";
 
       dotFeatures.push({
         type: "Feature",
@@ -218,7 +233,8 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
           device_id: d.device_id,
           name: d.name ?? "",
           neighborhood: d.neighborhood ?? "",
-          color, strokeColor,
+          status: d.status,
+          color,
           floodCount: stats.count,
           avgDepth,
           maxDepth: stats.maxDepth,
@@ -230,6 +246,16 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     });
 
     dotSrc.setData({ type: "FeatureCollection", features: dotFeatures });
+
+    // Alert rings for alert devices
+    const alertFeatures: GeoJSON.Feature[] = devices
+      .filter(d => d.status === "alert")
+      .map(d => ({
+        type: "Feature" as const,
+        geometry: { type: "Point" as const, coordinates: [d.lng, d.lat] },
+        properties: {},
+      }));
+    if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alertFeatures });
 
     // Build depth map from stats
     const depthMap: Record<string, number> = {};
@@ -291,32 +317,21 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         backdropFilter: "blur(4px)",
         border: "1px solid #1f2937",
       }}>
-        <div style={{ fontWeight: 600, marginBottom: 6, color: "#d1d5db", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-          Flood Activity (30d)
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#059669", display: "inline-block" }} />
-          <span>No floods</span>
+          <span>Online</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#d97706", display: "inline-block" }} />
-          <span>1-2 events</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", display: "inline-block" }} />
+          <span>Flood Alert</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#c2410c", display: "inline-block" }} />
-          <span>3-5 events</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4b5563", display: "inline-block" }} />
+          <span>Offline</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#b91c1c", display: "inline-block" }} />
-          <span>6+ events</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, paddingTop: 6, borderTop: "1px solid #1f2937" }}>
-          <span style={{ width: 12, height: 3, borderRadius: 2, background: "rgba(52,152,184,0.5)", display: "inline-block" }} />
-          <span>Flooded streets</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", border: "2px solid #dc2626", display: "inline-block" }} />
-          <span>Compound flooding</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 10, height: 3, borderRadius: 2, background: "rgba(52,152,184,0.5)", display: "inline-block" }} />
+          <span>Flooded Streets</span>
         </div>
       </div>
 
