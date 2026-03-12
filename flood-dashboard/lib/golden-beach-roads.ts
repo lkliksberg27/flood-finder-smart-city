@@ -270,20 +270,39 @@ export function calculateFloodFeatures(
 
     if (!bestRoad || bestDist > 30) continue;
 
-    // Walk forward along the road
+    // Walk forward — interpolate when tile vertices are far apart
     const seg: number[][] = [bestRoad[bestIdx]];
     let d = 0;
     for (let i = bestIdx + 1; i < bestRoad.length; i++) {
-      d += ptDist(bestRoad[i - 1], bestRoad[i]);
-      if (d > MAX_WALK) break;
+      const stepDist = ptDist(bestRoad[i - 1], bestRoad[i]);
+      if (d + stepDist > MAX_WALK) {
+        // Interpolate a point at MAX_WALK distance
+        const remaining = MAX_WALK - d;
+        const frac = remaining / stepDist;
+        seg.push([
+          bestRoad[i - 1][0] + (bestRoad[i][0] - bestRoad[i - 1][0]) * frac,
+          bestRoad[i - 1][1] + (bestRoad[i][1] - bestRoad[i - 1][1]) * frac,
+        ]);
+        break;
+      }
+      d += stepDist;
       seg.push(bestRoad[i]);
     }
 
-    // Walk backward
+    // Walk backward — same interpolation
     d = 0;
     for (let i = bestIdx - 1; i >= 0; i--) {
-      d += ptDist(bestRoad[i + 1], bestRoad[i]);
-      if (d > MAX_WALK) break;
+      const stepDist = ptDist(bestRoad[i + 1], bestRoad[i]);
+      if (d + stepDist > MAX_WALK) {
+        const remaining = MAX_WALK - d;
+        const frac = remaining / stepDist;
+        seg.unshift([
+          bestRoad[i + 1][0] + (bestRoad[i][0] - bestRoad[i + 1][0]) * frac,
+          bestRoad[i + 1][1] + (bestRoad[i][1] - bestRoad[i + 1][1]) * frac,
+        ]);
+        break;
+      }
+      d += stepDist;
       seg.unshift(bestRoad[i]);
     }
 
