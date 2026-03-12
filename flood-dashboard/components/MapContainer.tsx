@@ -6,7 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
 import { getReadings24h } from "@/lib/queries";
 import { getSupabase } from "@/lib/supabase";
-import { queryMapboxRoads, calculateRoadRiskFeatures } from "@/lib/golden-beach-roads";
+import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roads";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
@@ -163,29 +163,33 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Flood risk on streets — green/yellow/orange/red
+      // Flood water on streets — blue gradient
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": [
-            "interpolate", ["linear"], ["get", "risk"],
-            0, "#22c55e",       // green — safe
-            0.2, "#84cc16",     // lime
-            0.4, "#eab308",     // yellow
-            0.6, "#f97316",     // orange
-            0.8, "#ef4444",     // red
-            1, "#dc2626",       // deep red — severe
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, "#1a6fa0",
+            0.4, "#2196c8",
+            0.7, "#38b6e6",
+            1, "#5cc8f0",
           ],
           "line-width": [
             "interpolate", ["linear"], ["zoom"],
-            12, 2,
-            14, 3,
-            16, 4.5,
-            18, 6,
+            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1.5, 0.5, 2.5, 1, 4],
+            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 6],
+            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 3, 0.5, 5, 1, 8],
+            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 7, 1, 10],
           ],
-          "line-opacity": 0.85,
+          "line-opacity": [
+            "interpolate", ["linear"], ["get", "intensity"],
+            0.1, 0.4,
+            0.5, 0.6,
+            1, 0.75,
+          ],
+          "line-blur": 1,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -381,7 +385,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       if (cancelled) return;
       const roads = queryMapboxRoads(map, devices);
       if (roads.length === 0) return; // tiles not loaded yet
-      const features = calculateRoadRiskFeatures(roads, devices, depths);
+      const features = calculateFloodFeatures(roads, devices, depths);
       if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
     };
 
@@ -486,8 +490,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         </div>
         <hr style={{ border: "none", borderTop: "1px solid #374151", margin: "4px 0" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-          <span style={{ width: 14, height: 3, borderRadius: 2, background: "linear-gradient(to right, #22c55e, #eab308, #ef4444)", display: "inline-block" }} />
-          <span>Road Flood Risk</span>
+          <span style={{ width: 14, height: 3, borderRadius: 2, background: "linear-gradient(to right, #1a6fa0, #5cc8f0)", display: "inline-block" }} />
+          <span>Flood Water</span>
         </div>
       </div>
     </div>
