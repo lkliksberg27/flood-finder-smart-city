@@ -5,7 +5,6 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device, FloodEvent } from "@/lib/types";
 import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roads";
-import { buildFlowNetwork, computeFlowAccumulation } from "@/lib/geo";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
@@ -275,10 +274,6 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       if (stat.count > 0) depthMap[id] = stat.maxDepth;
     }
 
-    // Compute flow accumulation for slope-aware flood spread
-    const flowEdges = buildFlowNetwork(devices);
-    const flowAccum = computeFlowAccumulation(devices, flowEdges);
-
     // Query actual Mapbox road geometry and calculate flood water
     const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
     let cancelled = false;
@@ -288,7 +283,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       if (cancelled) return;
       const roads = queryMapboxRoads(map, devices);
       if (roads.length === 0) return;
-      const features = calculateFloodFeatures(roads, devices, depthMap, flowAccum);
+      const features = calculateFloodFeatures(roads, devices, depthMap);
       if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
     };
 
