@@ -6,7 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
 import { getReadings24h } from "@/lib/queries";
 import { getSupabase } from "@/lib/supabase";
-import { calculateFloodFeatures } from "@/lib/golden-beach-roads";
+import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roads";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
@@ -364,9 +364,30 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
-    // Calculate flood water on hardcoded road network — no tile loading dependency
-    const floodFeatures = calculateFloodFeatures(devices, floodDepths ?? {});
-    if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features: floodFeatures });
+    // Query actual Mapbox road geometry and calculate flood water
+    const depths = floodDepths ?? {};
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout>;
+
+    const updateFlood = () => {
+      if (cancelled) return;
+      const roads = queryMapboxRoads(map, devices);
+      if (roads.length === 0) return; // tiles not loaded yet
+      const features = calculateFloodFeatures(roads, devices, depths);
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+    };
+
+    // Try immediately (works if tiles are cached)
+    updateFlood();
+
+    // Retry after tiles load — idle fires when map finishes rendering
+    const onIdle = () => {
+      if (cancelled) return;
+      updateFlood();
+      // One more backup try 2s later
+      retryTimer = setTimeout(() => { if (!cancelled) updateFlood(); }, 2000);
+    };
+    map.once("idle", onIdle);
 
     // Fit bounds on initial load
     if (devices.length > 0 && map.getZoom() === 15) {
@@ -374,6 +395,12 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       devices.forEach((d) => bounds.extend([d.lng, d.lat]));
       map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
     }
+
+    return () => {
+      cancelled = true;
+      clearTimeout(retryTimer);
+      map.off("idle", onIdle);
+    };
   }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
   // Search location marker
