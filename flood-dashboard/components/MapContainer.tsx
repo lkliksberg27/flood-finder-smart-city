@@ -143,6 +143,12 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     resizeObserver.observe(containerRef.current);
 
     map.on("load", () => {
+      // Force tile rendering — nudge the map to trigger first paint
+      requestAnimationFrame(() => {
+        map.resize();
+        map.panBy([1, 0], { duration: 0 });
+        map.panBy([-1, 0], { duration: 0 });
+      });
       map.addSource("device-alerts", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -171,10 +177,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           ],
           "line-width": [
             "interpolate", ["linear"], ["zoom"],
-            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1, 0.5, 2, 1, 4],
-            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 7],
-            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 3, 0.5, 6, 1, 10],
-            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14],
+            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1, 0.5, 1.5, 1, 3],
+            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1.5, 0.5, 3, 1, 5],
+            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 7],
+            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 3, 0.5, 5, 1, 9],
           ],
           "line-opacity": [
             "interpolate", ["linear"], ["get", "intensity"],
