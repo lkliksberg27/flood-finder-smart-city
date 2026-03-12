@@ -118,11 +118,12 @@ function estimateElevation(
 }
 
 /**
- * Flood water strictly on actual road geometry.
+ * Flood water strictly on the ONE road the sensor sits on.
  *
- * For each flooding sensor, walk along EVERY nearby road segment
- * independently. Never jump between segments. Water stays on
- * exactly the Mapbox tile geometry it came from.
+ * For each flooding sensor:
+ * 1. Find the single closest road (the one it's physically on)
+ * 2. Walk along that road using WSE model
+ * 3. Spread distance scales with depth — shallow floods stay local
  *
  * H_water = H_sensor + depth.
  * Walk while H_ground <= H_water.
@@ -153,103 +154,106 @@ export function calculateFloodFeatures(
 
   const maxDepth = Math.max(1, ...flooding.map((f) => f.depth));
   const features: GeoJSON.Feature[] = [];
-  const MAX_WALK = 300;
 
   for (const sensor of flooding) {
     const sensorPt: number[] = [sensor.lng, sensor.lat];
     const H_water = sensor.elev + sensor.depth / 100;
 
-    // Walk each nearby road INDEPENDENTLY — never cross between roads
+    // Spread scales with depth: shallow (<10cm) ~60m, moderate ~120m, deep ~200m
+    const maxWalk = Math.min(200, 40 + sensor.depth * 5);
+
+    // Find the ONE closest road — the road this sensor is sitting on
+    let bestRoad: number[][] | null = null;
+    let bestDist = Infinity;
+    let bestIdx = -1;
+
     for (const road of roads) {
-      // Find closest vertex on THIS specific road
-      let closestIdx = -1;
-      let closestDist = Infinity;
       for (let i = 0; i < road.length; i++) {
         const d = ptDist(sensorPt, road[i]);
-        if (d < closestDist) {
-          closestDist = d;
-          closestIdx = i;
+        if (d < bestDist) {
+          bestDist = d;
+          bestRoad = road;
+          bestIdx = i;
         }
       }
-
-      // Skip roads more than 30m from sensor
-      if (closestDist > 30) continue;
-
-      // Walk forward along THIS road only
-      const seg: number[][] = [road[closestIdx]];
-      let fwdDist = 0;
-      for (let i = closestIdx + 1; i < road.length && fwdDist < MAX_WALK; i++) {
-        const stepDist = ptDist(road[i - 1], road[i]);
-        fwdDist += stepDist;
-
-        const H_ground = estimateElevation(
-          road[i][0],
-          road[i][1],
-          elevSensors,
-        );
-
-        // Stop at flood boundary — but always include at least 40m
-        if (H_ground > H_water && fwdDist > 40) {
-          const prevH = estimateElevation(
-            road[i - 1][0],
-            road[i - 1][1],
-            elevSensors,
-          );
-          const rise = H_ground - prevH;
-          if (rise > 0.001) {
-            const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
-            seg.push([
-              road[i - 1][0] + (road[i][0] - road[i - 1][0]) * frac,
-              road[i - 1][1] + (road[i][1] - road[i - 1][1]) * frac,
-            ]);
-          }
-          break;
-        }
-        seg.push(road[i]);
-      }
-
-      // Walk backward along THIS road only
-      let bwdDist = 0;
-      for (let i = closestIdx - 1; i >= 0 && bwdDist < MAX_WALK; i--) {
-        const stepDist = ptDist(road[i + 1], road[i]);
-        bwdDist += stepDist;
-
-        const H_ground = estimateElevation(
-          road[i][0],
-          road[i][1],
-          elevSensors,
-        );
-
-        if (H_ground > H_water && bwdDist > 40) {
-          const prevH = estimateElevation(
-            road[i + 1][0],
-            road[i + 1][1],
-            elevSensors,
-          );
-          const rise = H_ground - prevH;
-          if (rise > 0.001) {
-            const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
-            seg.unshift([
-              road[i + 1][0] + (road[i][0] - road[i + 1][0]) * frac,
-              road[i + 1][1] + (road[i][1] - road[i + 1][1]) * frac,
-            ]);
-          }
-          break;
-        }
-        seg.unshift(road[i]);
-      }
-
-      if (seg.length < 2) continue;
-
-      features.push({
-        type: "Feature",
-        geometry: { type: "LineString", coordinates: seg },
-        properties: {
-          intensity: Math.min(1, Math.max(0.15, sensor.depth / maxDepth)),
-          depth: sensor.depth,
-        },
-      });
     }
+
+    // Must be within 25m of an actual road
+    if (!bestRoad || bestDist > 25) continue;
+
+    // Walk forward along this road
+    const seg: number[][] = [bestRoad[bestIdx]];
+    let fwdDist = 0;
+    for (let i = bestIdx + 1; i < bestRoad.length && fwdDist < maxWalk; i++) {
+      const stepDist = ptDist(bestRoad[i - 1], bestRoad[i]);
+      fwdDist += stepDist;
+
+      const H_ground = estimateElevation(
+        bestRoad[i][0],
+        bestRoad[i][1],
+        elevSensors,
+      );
+
+      if (H_ground > H_water && fwdDist > 20) {
+        const prevH = estimateElevation(
+          bestRoad[i - 1][0],
+          bestRoad[i - 1][1],
+          elevSensors,
+        );
+        const rise = H_ground - prevH;
+        if (rise > 0.001) {
+          const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
+          seg.push([
+            bestRoad[i - 1][0] + (bestRoad[i][0] - bestRoad[i - 1][0]) * frac,
+            bestRoad[i - 1][1] + (bestRoad[i][1] - bestRoad[i - 1][1]) * frac,
+          ]);
+        }
+        break;
+      }
+      seg.push(bestRoad[i]);
+    }
+
+    // Walk backward along this road
+    let bwdDist = 0;
+    for (let i = bestIdx - 1; i >= 0 && bwdDist < maxWalk; i--) {
+      const stepDist = ptDist(bestRoad[i + 1], bestRoad[i]);
+      bwdDist += stepDist;
+
+      const H_ground = estimateElevation(
+        bestRoad[i][0],
+        bestRoad[i][1],
+        elevSensors,
+      );
+
+      if (H_ground > H_water && bwdDist > 20) {
+        const prevH = estimateElevation(
+          bestRoad[i + 1][0],
+          bestRoad[i + 1][1],
+          elevSensors,
+        );
+        const rise = H_ground - prevH;
+        if (rise > 0.001) {
+          const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
+          seg.unshift([
+            bestRoad[i + 1][0] + (bestRoad[i][0] - bestRoad[i + 1][0]) * frac,
+            bestRoad[i + 1][1] + (bestRoad[i][1] - bestRoad[i + 1][1]) * frac,
+          ]);
+        }
+        break;
+      }
+      seg.unshift(bestRoad[i]);
+    }
+
+    if (seg.length < 2) continue;
+
+    features.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: seg },
+      properties: {
+        intensity: Math.min(1, Math.max(0.15, sensor.depth / maxDepth)),
+        depth: sensor.depth,
+      },
+    });
   }
 
   return features;
