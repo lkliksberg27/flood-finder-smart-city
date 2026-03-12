@@ -197,10 +197,15 @@ export function queryMapboxRoads(
 /**
  * Blue flood water on roads from sensor readings.
  *
- * Spread distance depends on:
- *  - Flood depth: shallow → short spread, deep → wider spread
- *  - Relative elevation: sensor in a LOW spot → water pools locally (less spread),
- *    sensor HIGHER than neighbors → water flows outward (more spread)
+ * Spread distance uses a simplified Manning's equation approach:
+ *   - Depth → hydraulic radius (deeper = faster flow = more spread)
+ *   - Slope → velocity factor (steeper = faster drainage away from sensor)
+ *   - Flow accumulation → convergence zones accumulate more water
+ *   - Flat terrain → water pools locally instead of spreading
+ *
+ * Directional bias: water spreads further downhill than uphill along a road,
+ * determined by comparing road vertex elevations (approximated from nearby
+ * sensor elevation data).
  *
  * Each flooding sensor matches its nearest road and walks along it.
  */
@@ -208,6 +213,7 @@ export function calculateFloodFeatures(
   roads: number[][][],
   devices: Device[],
   depths: Record<string, number>,
+  flowAccum?: Record<string, number>,
 ): GeoJSON.Feature[] {
   const flooding = devices
     .filter((d) => (depths[d.device_id] ?? 0) > 0)
@@ -217,40 +223,78 @@ export function calculateFloodFeatures(
       lat: d.lat,
       elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
       depth: depths[d.device_id],
+      accum: flowAccum?.[d.device_id] ?? 0,
     }));
   if (flooding.length === 0) return [];
 
-  // Compute average elevation for relative-elevation comparison
-  const allElevs = devices.map((d) =>
-    (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
-  );
-  const avgElev = allElevs.reduce((a, b) => a + b, 0) / allElevs.length;
+  // Build a simple elevation lookup for directional bias:
+  // For any point, estimate elevation from nearest sensors using IDW
+  const withElev = devices.filter((d) => d.altitude_baro != null);
+  function estimateElevAtPoint(lng: number, lat: number): number {
+    let totalW = 0, totalE = 0;
+    for (const d of withElev) {
+      const dx = (d.lng - lng) * 111320 * COS_LAT;
+      const dy = (d.lat - lat) * 111320;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const w = 1 / Math.max(dist, 5); // IDW
+      totalW += w;
+      totalE += w * ((d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100);
+    }
+    return totalW > 0 ? totalE / totalW : 0;
+  }
+
+  // Compute local slope for each flooding sensor from its nearest neighbors
+  function localSlope(sensor: typeof flooding[0]): number {
+    const neighbors = withElev
+      .filter((n) => n.device_id !== sensor.id)
+      .map((n) => {
+        const nElev = (n.altitude_baro ?? 0) - (n.baseline_distance_cm ?? 0) / 100;
+        const dx = (n.lng - sensor.lng) * 111320 * COS_LAT;
+        const dy = (n.lat - sensor.lat) * 111320;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        return { grad: Math.abs(sensor.elev - nElev) / Math.max(dist, 1), dist };
+      })
+      .filter((n) => n.dist < 500)
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 4);
+
+    if (neighbors.length === 0) return 0.001;
+    return neighbors.reduce((s, n) => s + n.grad, 0) / neighbors.length;
+  }
 
   const maxDepth = Math.max(1, ...flooding.map((f) => f.depth));
   const features: GeoJSON.Feature[] = [];
 
+  // Manning's roughness coefficient for asphalt road
+  const MANNING_N = 0.013;
+
   for (const sensor of flooding) {
     const sensorPt: number[] = [sensor.lng, sensor.lat];
+    const slope = localSlope(sensor);
+    const depthM = sensor.depth / 100;
 
-    // --- Spread distance based on depth + relative elevation ---
-    // Base spread: 5m per cm of depth (5cm→25m, 15cm→75m, 30cm→150m)
-    let spread = sensor.depth * 5;
+    // Manning velocity: V = (1/n) * R^(2/3) * S^(1/2)
+    // For wide shallow flow, R ≈ depth
+    const effectiveSlope = Math.max(0.001, slope);
+    const velocity = (1 / MANNING_N) * Math.pow(depthM, 2 / 3) * Math.sqrt(effectiveSlope);
 
-    // Relative elevation: lower than average → water pools (less spread),
-    // higher than average → water flows out (more spread)
-    const relElev = sensor.elev - avgElev;
-    if (relElev < -0.3) {
-      spread *= 0.4; // deep low spot — water stays local
-    } else if (relElev < 0) {
-      spread *= 0.7; // slightly low — moderate pooling
-    } else if (relElev > 0.3) {
-      spread *= 1.5; // higher than average — water flows outward
-    } else if (relElev > 0) {
-      spread *= 1.2; // slightly above — some extra spread
+    // Drain time scales with depth (deeper = longer to drain)
+    const drainTime = 30 + sensor.depth * 2;
+
+    // Base spread from Manning's
+    let spread = velocity * drainTime;
+
+    // Flat terrain pooling: slope < 0.002 → water pools more
+    if (effectiveSlope < 0.002) {
+      spread *= 0.4 + (effectiveSlope / 0.002) * 0.6;
     }
 
-    // Clamp to reasonable bounds
-    const MAX_WALK = Math.max(20, Math.min(200, spread));
+    // Flow accumulation: convergence zones spread more
+    const accumFactor = 1 + Math.log2(1 + sensor.accum) * 0.15;
+    spread *= accumFactor;
+
+    // Clamp
+    const MAX_WALK_BASE = Math.max(15, Math.min(250, spread));
 
     // Find the single nearest road
     let bestRoad: number[][] | null = null;
@@ -270,14 +314,28 @@ export function calculateFloodFeatures(
 
     if (!bestRoad || bestDist > 30) continue;
 
+    // Determine downhill direction along road for asymmetric spread
+    const sensorElev = sensor.elev;
+    let fwdLower = false;
+    if (bestIdx + 1 < bestRoad.length && bestIdx - 1 >= 0) {
+      const fwdElev = estimateElevAtPoint(bestRoad[bestIdx + 1][0], bestRoad[bestIdx + 1][1]);
+      const bwdElev = estimateElevAtPoint(bestRoad[bestIdx - 1][0], bestRoad[bestIdx - 1][1]);
+      fwdLower = fwdElev < bwdElev;
+    }
+
+    // Asymmetric spread: 60% downhill, 40% uphill (water flows downhill more)
+    const downhillWalk = MAX_WALK_BASE * 1.2;
+    const uphillWalk = MAX_WALK_BASE * 0.8;
+    const fwdWalk = fwdLower ? downhillWalk : uphillWalk;
+    const bwdWalk = fwdLower ? uphillWalk : downhillWalk;
+
     // Walk forward — interpolate when tile vertices are far apart
     const seg: number[][] = [bestRoad[bestIdx]];
     let d = 0;
     for (let i = bestIdx + 1; i < bestRoad.length; i++) {
       const stepDist = ptDist(bestRoad[i - 1], bestRoad[i]);
-      if (d + stepDist > MAX_WALK) {
-        // Interpolate a point at MAX_WALK distance
-        const remaining = MAX_WALK - d;
+      if (d + stepDist > fwdWalk) {
+        const remaining = fwdWalk - d;
         const frac = remaining / stepDist;
         seg.push([
           bestRoad[i - 1][0] + (bestRoad[i][0] - bestRoad[i - 1][0]) * frac,
@@ -293,8 +351,8 @@ export function calculateFloodFeatures(
     d = 0;
     for (let i = bestIdx - 1; i >= 0; i--) {
       const stepDist = ptDist(bestRoad[i + 1], bestRoad[i]);
-      if (d + stepDist > MAX_WALK) {
-        const remaining = MAX_WALK - d;
+      if (d + stepDist > bwdWalk) {
+        const remaining = bwdWalk - d;
         const frac = remaining / stepDist;
         seg.unshift([
           bestRoad[i + 1][0] + (bestRoad[i][0] - bestRoad[i + 1][0]) * frac,

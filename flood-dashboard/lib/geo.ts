@@ -23,6 +23,183 @@ export function formatDistance(km: number): string {
   return `${km.toFixed(1)}km`;
 }
 
+// ─── Hydraulic gradient & flow network ───────────────────────────
+
+/**
+ * Hydraulic gradient (dimensionless slope) between two sensors.
+ * Positive means water flows from a → b (a is higher).
+ * Uses horizontal haversine distance as the run.
+ */
+export function hydraulicGradient(a: Device, b: Device): number {
+  const elevA = streetElevation(a);
+  const elevB = streetElevation(b);
+  const distKm = haversineKm(a.lat, a.lng, b.lat, b.lng);
+  const distM = distKm * 1000;
+  if (distM < 1) return 0;
+  return (elevA - elevB) / distM;
+}
+
+/** A directed edge in the sensor flow network */
+export interface FlowEdge {
+  from: string;        // device_id of upstream sensor (higher)
+  to: string;          // device_id of downstream sensor (lower)
+  gradient: number;    // slope magnitude (always positive)
+  distKm: number;      // horizontal distance
+  elevDrop: number;    // elevation difference in meters
+}
+
+/**
+ * Build a sparse flow network using steepest-descent routing.
+ *
+ * For each sensor, find the neighboring sensor with the steepest
+ * downhill gradient (analogous to D8 on a DEM but for irregular points).
+ * Also includes secondary flow paths where gradient > 50% of the
+ * steepest, capturing flow divergence on flat terrain (D-infinity style).
+ *
+ * maxNeighborDist: only consider neighbors within this distance (km).
+ * For a dense urban network, 0.8km works well.
+ */
+export function buildFlowNetwork(
+  devices: Device[],
+  maxNeighborDist = 0.8,
+): FlowEdge[] {
+  const withElev = devices.filter((d) => d.altitude_baro != null);
+  if (withElev.length < 2) return [];
+
+  const edges: FlowEdge[] = [];
+  const edgeSet = new Set<string>();
+
+  for (const d of withElev) {
+    const elev = streetElevation(d);
+    // Find all downhill neighbors within range
+    const downhill = withElev
+      .filter((n) => n.device_id !== d.device_id)
+      .map((n) => {
+        const nElev = streetElevation(n);
+        const distKm = haversineKm(d.lat, d.lng, n.lat, n.lng);
+        const distM = distKm * 1000;
+        const grad = distM > 1 ? (elev - nElev) / distM : 0;
+        return { device: n, elev: nElev, distKm, grad, elevDrop: elev - nElev };
+      })
+      .filter((n) => n.grad > 0.0001 && n.distKm <= maxNeighborDist)
+      .sort((a, b) => b.grad - a.grad);
+
+    if (downhill.length === 0) continue;
+
+    const steepest = downhill[0].grad;
+
+    // Primary flow: steepest descent (D8)
+    // Secondary flows: any path with gradient > 50% of steepest (D-infinity approx)
+    for (const n of downhill) {
+      if (n.grad < steepest * 0.5) break;
+      const key = `${d.device_id}->${n.device.device_id}`;
+      if (edgeSet.has(key)) continue;
+      edgeSet.add(key);
+      edges.push({
+        from: d.device_id,
+        to: n.device.device_id,
+        gradient: n.grad,
+        distKm: n.distKm,
+        elevDrop: n.elevDrop,
+      });
+    }
+  }
+
+  return edges;
+}
+
+/**
+ * Flow accumulation: count how many upstream sensors drain into each sensor.
+ *
+ * Uses the flow network to trace upstream. A sensor that sits at the
+ * bottom of a hill where 5 other sensors drain into it gets accumulation=5.
+ * This correlates strongly with flood risk — convergence zones pool water.
+ */
+export function computeFlowAccumulation(
+  devices: Device[],
+  edges: FlowEdge[],
+): Record<string, number> {
+  // Build adjacency: for each device, which devices drain INTO it
+  const inbound: Record<string, string[]> = {};
+  for (const d of devices) inbound[d.device_id] = [];
+  for (const e of edges) {
+    if (!inbound[e.to]) inbound[e.to] = [];
+    inbound[e.to].push(e.from);
+  }
+
+  // Recursive accumulation with memoization
+  const cache: Record<string, number> = {};
+  function accum(id: string, visited: Set<string>): number {
+    if (cache[id] != null) return cache[id];
+    if (visited.has(id)) return 0; // cycle guard
+    visited.add(id);
+    let total = 0;
+    for (const upstream of (inbound[id] ?? [])) {
+      total += 1 + accum(upstream, visited);
+    }
+    cache[id] = total;
+    return total;
+  }
+
+  const result: Record<string, number> = {};
+  for (const d of devices) {
+    result[d.device_id] = accum(d.device_id, new Set());
+  }
+  return result;
+}
+
+/**
+ * Estimate flood spread distance using simplified Manning's equation.
+ *
+ * V = (1/n) * R^(2/3) * S^(1/2)   where:
+ *   n = Manning's roughness (0.013 for asphalt road)
+ *   R = hydraulic radius ≈ depth for wide shallow flow (meters)
+ *   S = longitudinal slope (dimensionless)
+ *
+ * Spread = velocity * characteristic_time (how far water travels
+ * in the time it takes to drain or be absorbed).
+ * For shallow urban flooding on flat terrain, we use a simplified
+ * approach: spread ∝ depth * sqrt(slope) / roughness.
+ *
+ * On very flat terrain (S < 0.001), water pools instead of flowing,
+ * so we cap the minimum slope and reduce spread for pooling.
+ */
+export function manningSpreadEstimate(
+  depthCm: number,
+  slopeToNeighbor: number,
+  flowAccum: number,
+): number {
+  const n = 0.013; // Manning's n for asphalt
+  const depthM = depthCm / 100;
+
+  // Effective slope: use at least 0.001 (1mm/m) for completely flat terrain
+  const S = Math.max(0.001, Math.abs(slopeToNeighbor));
+
+  // Simplified Manning velocity (m/s) for sheet flow
+  const velocity = (1 / n) * Math.pow(depthM, 2 / 3) * Math.sqrt(S);
+
+  // Characteristic drain time: ~60s for shallow flow, longer for deeper
+  const drainTime = 30 + depthCm * 2;
+
+  // Base spread from velocity * time
+  let spread = velocity * drainTime;
+
+  // Flat terrain pooling: if slope < 0.002, water pools more locally
+  if (S < 0.002) {
+    spread *= 0.4 + (S / 0.002) * 0.6; // scale down to 40% on dead-flat ground
+  }
+
+  // Flow accumulation bonus: convergence zones spread further
+  // Each upstream contributor adds ~15% spread (diminishing)
+  const accumFactor = 1 + Math.log2(1 + flowAccum) * 0.15;
+  spread *= accumFactor;
+
+  // Clamp to reasonable bounds (15m–250m)
+  return Math.max(15, Math.min(250, spread));
+}
+
+// ─── Road dip analysis ───────────────────────────────────────────
+
 /** Analyze road dips — sensors sitting lower than their neighbors */
 export interface DipInfo {
   device_id: string;
@@ -32,34 +209,60 @@ export interface DipInfo {
   avgNeighborElev: number;
   dipCm: number;
   floodCount: number;
+  flowAccumulation: number;
+  drainageRisk: 'critical' | 'high' | 'moderate' | 'low';
 }
 
 export function findRoadDips(devices: Device[], floodCounts: Record<string, number>): DipInfo[] {
   const withElev = devices.filter((d) => d.altitude_baro != null);
   if (withElev.length < 3) return [];
 
+  const edges = buildFlowNetwork(devices);
+  const accumulation = computeFlowAccumulation(devices, edges);
+
   return withElev.map((d) => {
     const elev = streetElevation(d);
+
+    // Use distance-weighted neighbor elevation (closer neighbors matter more)
     const neighbors = withElev
       .filter((n) => n.device_id !== d.device_id)
       .map((n) => ({ ...n, elev: streetElevation(n), dist: haversineKm(d.lat, d.lng, n.lat, n.lng) }))
       .sort((a, b) => a.dist - b.dist)
-      .slice(0, 3);
+      .slice(0, 4);
 
-    if (neighbors.length === 0) return { device_id: d.device_id, name: d.name, neighborhood: d.neighborhood, elevation_m: elev, avgNeighborElev: 0, dipCm: 0, floodCount: 0 };
-    const avgNeighborElev = neighbors.reduce((s, n) => s + n.elev, 0) / neighbors.length;
-    const diff = elev - avgNeighborElev;
+    if (neighbors.length === 0) return null;
+
+    // Inverse-distance weighted average: closer neighbors influence more
+    const totalWeight = neighbors.reduce((s, n) => s + 1 / Math.max(n.dist, 0.01), 0);
+    const weightedAvgElev = neighbors.reduce(
+      (s, n) => s + (n.elev / Math.max(n.dist, 0.01)),
+      0,
+    ) / totalWeight;
+
+    const diff = elev - weightedAvgElev;
+    const dipCm = Math.round(-diff * 100);
+    const accum = accumulation[d.device_id] ?? 0;
+    const floods = floodCounts[d.device_id] ?? 0;
+
+    // Drainage risk: combines dip depth, flow accumulation, and flood history
+    const riskScore = dipCm * 0.4 + accum * 8 + floods * 3;
+    const drainageRisk: DipInfo['drainageRisk'] =
+      riskScore > 40 ? 'critical' :
+      riskScore > 20 ? 'high' :
+      riskScore > 10 ? 'moderate' : 'low';
 
     return {
       device_id: d.device_id,
       name: d.name,
       neighborhood: d.neighborhood,
       elevation_m: parseFloat(elev.toFixed(2)),
-      avgNeighborElev: parseFloat(avgNeighborElev.toFixed(2)),
-      dipCm: Math.round(-diff * 100),
-      floodCount: floodCounts[d.device_id] ?? 0,
+      avgNeighborElev: parseFloat(weightedAvgElev.toFixed(2)),
+      dipCm,
+      floodCount: floods,
+      flowAccumulation: accum,
+      drainageRisk,
     };
   })
-    .filter((d) => d.dipCm > 10)
+    .filter((d): d is DipInfo => d != null && d.dipCm > 8) // 8cm threshold (more sensitive than before)
     .sort((a, b) => b.dipCm - a.dipCm);
 }
