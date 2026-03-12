@@ -138,6 +138,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     const map = mapRef.current;
 
+    // Fix grey-map-on-load: resize after container is fully rendered
+    setTimeout(() => map.resize(), 100);
+    setTimeout(() => map.resize(), 500);
+    setTimeout(() => map.resize(), 1500);
+
     map.on("load", () => {
       map.addSource("device-alerts", {
         type: "geojson",

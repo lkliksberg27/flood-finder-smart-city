@@ -135,7 +135,7 @@ export function queryMapboxRoads(
 
   for (const device of devices) {
     const point = map.project([device.lng, device.lat]);
-    const size = 80; // ~120m at zoom 15
+    const size = 120; // ~180m at zoom 15
     const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
       [point.x - size, point.y - size],
       [point.x + size, point.y + size],
@@ -228,8 +228,8 @@ export function calculateFloodFeatures(
         const d = ptDist(sensorPt, road[i]);
         if (d < nearDist) { nearDist = d; nearIdx = i; }
       }
-      // 25m threshold — sensor must be ON this road (on a mailbox alongside it)
-      if (nearDist > 25) continue;
+      // 50m threshold — sensor is on a mailbox alongside this road
+      if (nearDist > 50) continue;
 
       // Walk forward along road
       const seg: number[][] = [road[nearIdx]];
