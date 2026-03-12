@@ -274,27 +274,6 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       if (stat.count > 0) depthMap[id] = stat.maxDepth;
     }
 
-    // Query actual Mapbox road geometry and calculate flood water
-    const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout>;
-
-    const updateFlood = () => {
-      if (cancelled) return;
-      const roads = queryMapboxRoads(map, devices);
-      if (roads.length === 0) return;
-      const features = calculateFloodFeatures(roads, devices, depthMap);
-      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
-    };
-
-    updateFlood();
-    const onIdle = () => {
-      if (cancelled) return;
-      updateFlood();
-      retryTimer = setTimeout(() => { if (!cancelled) updateFlood(); }, 2000);
-    };
-    map.once("idle", onIdle);
-
     // Fit bounds
     if (devices.length > 1) {
       const bounds = new mapboxgl.LngLatBounds();
@@ -304,9 +283,28 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       map.flyTo({ center: [devices[0].lng, devices[0].lat], zoom: 16, duration: 500 });
     }
 
+    // Query road geometry and calculate flood water
+    const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
+    let cancelled = false;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    const updateFlood = () => {
+      if (cancelled) return;
+      const roads = queryMapboxRoads(map, devices);
+      if (roads.length === 0) return;
+      const features = calculateFloodFeatures(roads, devices, depthMap);
+      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+    };
+
+    // Run immediately with fallback roads, then re-run when tiles load
+    updateFlood();
+    const onIdle = () => { if (!cancelled) updateFlood(); };
+    map.once("idle", onIdle);
+    timers.push(setTimeout(() => { if (!cancelled) updateFlood(); }, 3000));
+
     return () => {
       cancelled = true;
-      clearTimeout(retryTimer);
+      timers.forEach(clearTimeout);
       map.off("idle", onIdle);
     };
   }, [devices, events, floodCounts, mapReady]);
