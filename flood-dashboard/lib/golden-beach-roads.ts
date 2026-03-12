@@ -246,7 +246,8 @@ export function calculateFloodFeatures(
   const features: GeoJSON.Feature[] = [];
 
   for (const sensor of flooding) {
-    const walkMax = Math.min(30 + sensor.depth * 4, 250);
+    // Realistic spread: ~20m base + 2m per cm depth, capped at 100m
+    const walkMax = Math.min(20 + sensor.depth * 2, 100);
     const sensorPt: number[] = [sensor.lng, sensor.lat];
 
     for (const road of roads) {
@@ -256,8 +257,8 @@ export function calculateFloodFeatures(
         const d = ptDist(sensorPt, road[i]);
         if (d < nearDist) { nearDist = d; nearIdx = i; }
       }
-      // 50m threshold — sensor is on a mailbox alongside this road
-      if (nearDist > 50) continue;
+      // 30m threshold — sensor sits on or beside this road
+      if (nearDist > 30) continue;
 
       // Walk forward along road
       const seg: number[][] = [road[nearIdx]];
@@ -265,7 +266,7 @@ export function calculateFloodFeatures(
       for (let i = nearIdx + 1; i < road.length; i++) {
         d += ptDist(road[i - 1], road[i]);
         const elev = idwElev(road[i][0], road[i][1], allSensors);
-        if (d > (elev < sensor.elev ? walkMax * 1.5 : walkMax)) break;
+        if (d > (elev < sensor.elev ? walkMax * 1.3 : walkMax)) break;
         seg.push(road[i]);
       }
 
@@ -274,7 +275,7 @@ export function calculateFloodFeatures(
       for (let i = nearIdx - 1; i >= 0; i--) {
         d += ptDist(road[i + 1], road[i]);
         const elev = idwElev(road[i][0], road[i][1], allSensors);
-        if (d > (elev < sensor.elev ? walkMax * 1.5 : walkMax)) break;
+        if (d > (elev < sensor.elev ? walkMax * 1.3 : walkMax)) break;
         seg.unshift(road[i]);
       }
 
