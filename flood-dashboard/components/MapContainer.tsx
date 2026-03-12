@@ -382,10 +382,12 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const timers: ReturnType<typeof setTimeout>[] = [];
 
     const updateFlood = () => {
-      if (cancelled) return;
+      if (cancelled) return false;
       const roads = queryMapboxRoads(map, devices);
-      if (roads.length === 0) return false; // tiles not loaded yet
+      console.log("[FLOOD] roads:", roads.length, "devices:", devices.length, "depths:", Object.keys(depths).length, "depthValues:", JSON.stringify(depths));
+      if (roads.length === 0) return false;
       const features = calculateFloodFeatures(roads, devices, depths);
+      console.log("[FLOOD] features:", features.length);
       if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
       return features.length > 0;
     };
