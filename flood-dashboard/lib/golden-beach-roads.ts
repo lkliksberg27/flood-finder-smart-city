@@ -194,81 +194,97 @@ export function queryMapboxRoads(
   return merged.length > 0 ? merged : buildFallbackRoads(devices);
 }
 
+/** Flood risk at a point using IDW interpolation from sensor readings */
+function pointRisk(
+  lng: number,
+  lat: number,
+  sensors: { lng: number; lat: number; depth: number; elev: number }[],
+  maxDepth: number,
+): number {
+  let wDepth = 0, wTotal = 0;
+  let nearestDist = Infinity;
+  let nearestElev = 0;
+
+  for (const s of sensors) {
+    const dx = (s.lng - lng) * 111320 * COS_LAT;
+    const dy = (s.lat - lat) * 111320;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const w = 1 / Math.max(dist * dist, 25);
+    wDepth += s.depth * w;
+    wTotal += w;
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearestElev = s.elev;
+    }
+  }
+
+  const interpolated = wTotal > 0 ? wDepth / wTotal : 0;
+  let risk = interpolated / maxDepth;
+
+  // Low-elevation areas near sensors get a base risk even without active flooding
+  if (nearestElev < 0.5 && nearestDist < 100) {
+    risk = Math.max(risk, 0.18);
+  } else if (nearestElev < 1.0 && nearestDist < 80) {
+    risk = Math.max(risk, 0.08);
+  }
+
+  // Fade out risk for roads far from any sensor
+  if (nearestDist > 250) risk *= 0.2;
+  else if (nearestDist > 150) risk *= 0.5;
+
+  return Math.min(1, risk);
+}
+
 /**
- * Calculate flood water GeoJSON features from queried road geometry.
+ * Color every road segment by flood risk (green → yellow → orange → red).
  *
- * Only shows water where sensors actually detect it. Each flooding sensor
- * matches its single nearest road and shows a short segment around it.
- * No cross-street spreading, no elevation extrapolation.
+ * Splits each road into ~30m segments and assigns a risk score using
+ * IDW interpolation from the sensor network. Risk is based on actual
+ * sensor flood depth readings and street elevation.
  */
-export function calculateFloodFeatures(
+export function calculateRoadRiskFeatures(
   roads: number[][][],
   devices: Device[],
   depths: Record<string, number>,
 ): GeoJSON.Feature[] {
-  const flooding = devices
-    .filter((d) => (depths[d.device_id] ?? 0) > 0)
-    .map((d) => ({
-      id: d.device_id,
-      lng: d.lng,
-      lat: d.lat,
-      depth: depths[d.device_id],
-    }));
-  if (flooding.length === 0) return [];
+  if (devices.length === 0 || roads.length === 0) return [];
 
-  const maxDepth = Math.max(1, ...flooding.map((f) => f.depth));
+  const sensors = devices.map((d) => ({
+    lng: d.lng,
+    lat: d.lat,
+    depth: depths[d.device_id] ?? 0,
+    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
+  }));
+  const maxDepth = Math.max(1, ...sensors.map((s) => s.depth));
+
+  const SEGMENT_LEN = 30; // split roads into ~30m pieces
   const features: GeoJSON.Feature[] = [];
 
-  for (const sensor of flooding) {
-    const sensorPt: number[] = [sensor.lng, sensor.lat];
+  for (const road of roads) {
+    if (road.length < 2) continue;
 
-    // Find the single nearest road to this sensor
-    let bestRoad: number[][] | null = null;
-    let bestDist = Infinity;
-    let bestIdx = -1;
+    let segStart = 0;
+    let accumulated = 0;
 
-    for (const road of roads) {
-      for (let i = 0; i < road.length; i++) {
-        const d = ptDist(sensorPt, road[i]);
-        if (d < bestDist) {
-          bestDist = d;
-          bestRoad = road;
-          bestIdx = i;
+    for (let i = 1; i < road.length; i++) {
+      accumulated += ptDist(road[i - 1], road[i]);
+
+      if (accumulated >= SEGMENT_LEN || i === road.length - 1) {
+        const segCoords = road.slice(segStart, i + 1);
+        if (segCoords.length >= 2) {
+          const mid = segCoords[Math.floor(segCoords.length / 2)];
+          const risk = pointRisk(mid[0], mid[1], sensors, maxDepth);
+
+          features.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: segCoords },
+            properties: { risk },
+          });
         }
+        segStart = i;
+        accumulated = 0;
       }
     }
-
-    // Only if sensor is within 30m of a road
-    if (!bestRoad || bestDist > 30) continue;
-
-    // Show a short segment around the sensor (~40m each direction, just enough to be visible)
-    const MAX_WALK = 40;
-    const seg: number[][] = [bestRoad[bestIdx]];
-
-    let d = 0;
-    for (let i = bestIdx + 1; i < bestRoad.length; i++) {
-      d += ptDist(bestRoad[i - 1], bestRoad[i]);
-      if (d > MAX_WALK) break;
-      seg.push(bestRoad[i]);
-    }
-
-    d = 0;
-    for (let i = bestIdx - 1; i >= 0; i--) {
-      d += ptDist(bestRoad[i + 1], bestRoad[i]);
-      if (d > MAX_WALK) break;
-      seg.unshift(bestRoad[i]);
-    }
-
-    if (seg.length < 2) continue;
-
-    features.push({
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: seg },
-      properties: {
-        intensity: Math.min(1, sensor.depth / maxDepth),
-        depth: sensor.depth,
-      },
-    });
   }
 
   return features;
