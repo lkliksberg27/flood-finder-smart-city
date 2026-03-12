@@ -194,31 +194,12 @@ export function queryMapboxRoads(
   return merged.length > 0 ? merged : buildFallbackRoads(devices);
 }
 
-/** IDW elevation estimate at a point using the full sensor network */
-function idwElev(
-  lng: number,
-  lat: number,
-  sensors: { lng: number; lat: number; elev: number }[],
-): number {
-  let wE = 0, wT = 0;
-  for (const s of sensors) {
-    const dx = (s.lng - lng) * 111320 * COS_LAT;
-    const dy = (s.lat - lat) * 111320;
-    const w = 1 / Math.max(dx * dx + dy * dy, 25);
-    wE += s.elev * w;
-    wT += w;
-  }
-  return wT > 0 ? wE / wT : 0;
-}
-
 /**
  * Calculate flood water GeoJSON features from queried road geometry.
  *
- * For each flooding sensor, finds every road within 25m (the sensor's
- * own road — it's on a mailbox on that road). Walks along the road in
- * both directions; water extends further downhill based on elevation.
- * At intersections, a sensor naturally matches multiple roads, so water
- * spreads onto cross streets.
+ * Only shows water where sensors actually detect it. Each flooding sensor
+ * matches its single nearest road and shows a short segment around it.
+ * No cross-street spreading, no elevation extrapolation.
  */
 export function calculateFloodFeatures(
   roads: number[][][],
@@ -231,68 +212,63 @@ export function calculateFloodFeatures(
       id: d.device_id,
       lng: d.lng,
       lat: d.lat,
-      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
       depth: depths[d.device_id],
     }));
   if (flooding.length === 0) return [];
-
-  const allSensors = devices.map((d) => ({
-    lng: d.lng,
-    lat: d.lat,
-    elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
-  }));
 
   const maxDepth = Math.max(1, ...flooding.map((f) => f.depth));
   const features: GeoJSON.Feature[] = [];
 
   for (const sensor of flooding) {
-    // Water surface level = street elevation at sensor + measured flood depth
-    const waterSurface = sensor.elev + sensor.depth / 100;
     const sensorPt: number[] = [sensor.lng, sensor.lat];
-    const MAX_WALK = 150; // safety cap in meters
+
+    // Find the single nearest road to this sensor
+    let bestRoad: number[][] | null = null;
+    let bestDist = Infinity;
+    let bestIdx = -1;
 
     for (const road of roads) {
-      // Find nearest vertex on this road to the sensor
-      let nearIdx = -1, nearDist = Infinity;
       for (let i = 0; i < road.length; i++) {
         const d = ptDist(sensorPt, road[i]);
-        if (d < nearDist) { nearDist = d; nearIdx = i; }
+        if (d < bestDist) {
+          bestDist = d;
+          bestRoad = road;
+          bestIdx = i;
+        }
       }
-      // 30m threshold — sensor sits on or beside this road
-      if (nearDist > 30) continue;
-
-      // Walk forward — water extends while street stays below water surface
-      const seg: number[][] = [road[nearIdx]];
-      let d = 0;
-      for (let i = nearIdx + 1; i < road.length; i++) {
-        d += ptDist(road[i - 1], road[i]);
-        if (d > MAX_WALK) break;
-        const streetElev = idwElev(road[i][0], road[i][1], allSensors);
-        if (streetElev > waterSurface) break; // street rises above water
-        seg.push(road[i]);
-      }
-
-      // Walk backward — same elevation check
-      d = 0;
-      for (let i = nearIdx - 1; i >= 0; i--) {
-        d += ptDist(road[i + 1], road[i]);
-        if (d > MAX_WALK) break;
-        const streetElev = idwElev(road[i][0], road[i][1], allSensors);
-        if (streetElev > waterSurface) break;
-        seg.unshift(road[i]);
-      }
-
-      if (seg.length < 2) continue;
-
-      features.push({
-        type: "Feature",
-        geometry: { type: "LineString", coordinates: seg },
-        properties: {
-          intensity: Math.min(1, sensor.depth / maxDepth),
-          depth: sensor.depth,
-        },
-      });
     }
+
+    // Only if sensor is within 30m of a road
+    if (!bestRoad || bestDist > 30) continue;
+
+    // Show a short segment around the sensor (~40m each direction, just enough to be visible)
+    const MAX_WALK = 40;
+    const seg: number[][] = [bestRoad[bestIdx]];
+
+    let d = 0;
+    for (let i = bestIdx + 1; i < bestRoad.length; i++) {
+      d += ptDist(bestRoad[i - 1], bestRoad[i]);
+      if (d > MAX_WALK) break;
+      seg.push(bestRoad[i]);
+    }
+
+    d = 0;
+    for (let i = bestIdx - 1; i >= 0; i--) {
+      d += ptDist(bestRoad[i + 1], bestRoad[i]);
+      if (d > MAX_WALK) break;
+      seg.unshift(bestRoad[i]);
+    }
+
+    if (seg.length < 2) continue;
+
+    features.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: seg },
+      properties: {
+        intensity: Math.min(1, sensor.depth / maxDepth),
+        depth: sensor.depth,
+      },
+    });
   }
 
   return features;
