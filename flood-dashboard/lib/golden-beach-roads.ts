@@ -113,24 +113,6 @@ function dedupKey(coords: number[][]): string {
   return `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
 }
 
-/** Direction unit vector of a road (start→end), in projected coords. */
-function roadDir(road: number[][]): [number, number] {
-  const s = road[0], e = road[road.length - 1];
-  const lat = (s[1] + e[1]) / 2;
-  const cL = cosLat(lat);
-  const dx = (e[0] - s[0]) * cL;
-  const dy = e[1] - s[1];
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1e-10) return [1, 0];
-  return [dx / len, dy / len];
-}
-
-/** Angle between two road directions in degrees (0-90, direction-agnostic). */
-function turnAngle(d1: [number, number], d2: [number, number]): number {
-  const dot = Math.abs(d1[0] * d2[0] + d1[1] * d2[1]);
-  return Math.acos(Math.min(1, dot)) * (180 / Math.PI);
-}
-
 /** Query real road geometry from Mapbox vector tiles. */
 export function queryMapboxRoads(
   map: mapboxgl.Map,
@@ -153,7 +135,7 @@ export function queryMapboxRoads(
 
   for (const device of devices) {
     const point = map.project([device.lng, device.lat]);
-    const size = 150;
+    const size = 80;
     const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
       [point.x - size, point.y - size],
       [point.x + size, point.y + size],
@@ -190,9 +172,9 @@ export function queryMapboxRoads(
  * Flood water spreads FROM the snap point THROUGH connected streets.
  *
  * 1. Find snap point (closest point on any road)
- * 2. BFS along connected roads — turns penalise spread distance
- * 3. Clip each connected road to the (turn-adjusted) coverage radius
- * 4. Subdivide into ~5 m pieces for a smooth intensity gradient
+ * 2. BFS along connected roads (endpoints within 5m = intersection)
+ * 3. Clip each connected road to the coverage radius around snap point
+ * 4. Intensity fades with distance from snap point
  */
 export function calculateFloodFeatures(
   roads: number[][][],
@@ -205,11 +187,10 @@ export function calculateFloodFeatures(
       lng: d.lng,
       lat: d.lat,
       depth: depths[d.device_id] ?? 0,
-      elevation: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
     }));
   if (flooding.length === 0 || roads.length === 0) return [];
 
-  // Build road connectivity graph: endpoints within 10 m = intersection
+  // Build road connectivity graph: roads sharing an endpoint within 5m
   const adj: number[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {
     const iStart = roads[i][0];
@@ -218,8 +199,8 @@ export function calculateFloodFeatures(
       const jStart = roads[j][0];
       const jEnd = roads[j][roads[j].length - 1];
       if (
-        ptDist(iStart, jStart) < 10 || ptDist(iStart, jEnd) < 10 ||
-        ptDist(iEnd, jStart) < 10 || ptDist(iEnd, jEnd) < 10
+        ptDist(iStart, jStart) < 5 || ptDist(iStart, jEnd) < 5 ||
+        ptDist(iEnd, jStart) < 5 || ptDist(iEnd, jEnd) < 5
       ) {
         adj[i].push(j);
         adj[j].push(i);
@@ -227,120 +208,86 @@ export function calculateFloodFeatures(
     }
   }
 
-  // Precompute road direction vectors for turn detection
-  const dirs = roads.map(roadDir);
-
-  // Best result per road segment across all sensors
+  // Best intensity per road segment across all sensors
   const best = new Map<string, {
     intensity: number;
     depth: number;
     coords: [number[], number[]];
-    snapPt: number[];
-    maxDist: number;
-    turnCost: number;
   }>();
 
   for (const sensor of flooding) {
     const sensorPt = [sensor.lng, sensor.lat];
 
-    // Find snap road
+    // Find snap road: the road with the closest point to the sensor
     let snapRi = -1;
     let snapDist = Infinity;
     for (let ri = 0; ri < roads.length; ri++) {
       for (let si = 0; si < roads[ri].length - 1; si++) {
         const d = ptSegDist(sensorPt, roads[ri][si], roads[ri][si + 1]);
-        if (d < snapDist) { snapDist = d; snapRi = ri; }
+        if (d < snapDist) {
+          snapDist = d;
+          snapRi = ri;
+        }
       }
     }
     if (snapRi < 0 || snapDist > 30) continue;
 
+    // The snap point is the center of the flood spread
     const snapPt = snapToRoad(sensorPt, roads[snapRi]);
 
-    // Coverage radius: depth + elevation bonus (higher ground → more spread)
-    const elevBonus = Math.max(0, Math.min(15, sensor.elevation * 2));
-    const maxDist = Math.min(75, 20 + sensor.depth * 1.5 + elevBonus);
+    // Coverage radius: based on flood depth
+    const maxDist = Math.min(60, 20 + sensor.depth * 1.5);
 
-    // BFS with turn-cost tracking
-    const reachable = new Map<number, number>(); // road index → accumulated turn cost
-    reachable.set(snapRi, 0);
-    const queue: number[] = [snapRi];
+    // BFS: find all roads reachable from snap road through connected streets
+    const reachable = new Set<number>();
+    const queue = [snapRi];
+    reachable.add(snapRi);
 
     while (queue.length > 0) {
       const ri = queue.shift()!;
-      const parentCost = reachable.get(ri)!;
-
       for (const nri of adj[ri]) {
         if (reachable.has(nri)) continue;
-
-        const angle = turnAngle(dirs[ri], dirs[nri]);
-        const penalty = angle < 20 ? 0 : angle < 50 ? angle * 0.3 : angle * 0.6;
-        const newCost = parentCost + penalty;
-
-        // Too many turns — water won't reach
-        if (newCost > maxDist * 0.7) continue;
-
-        // Effective radius shrinks with accumulated turns
-        const effRadius = maxDist - newCost * 0.4;
+        // Only follow if any part of the neighbor road is within range
         let nearEnough = false;
         for (let si = 0; si < roads[nri].length - 1; si++) {
-          if (ptSegDist(snapPt, roads[nri][si], roads[nri][si + 1]) <= effRadius) {
+          if (ptSegDist(snapPt, roads[nri][si], roads[nri][si + 1]) <= maxDist) {
             nearEnough = true;
             break;
           }
         }
         if (nearEnough) {
-          reachable.set(nri, newCost);
+          reachable.add(nri);
           queue.push(nri);
         }
       }
     }
 
-    // Clip reachable roads and record best per segment
-    for (const [ri, turnCost] of reachable) {
+    // For each reachable road, clip segments to the coverage circle
+    for (const ri of reachable) {
       const road = roads[ri];
-      const effRadius = maxDist - turnCost * 0.4;
-
       for (let si = 0; si < road.length - 1; si++) {
-        const clipped = clipSegment(snapPt, road[si], road[si + 1], effRadius);
+        const clipped = clipSegment(snapPt, road[si], road[si + 1], maxDist);
         if (!clipped) continue;
 
         const dist = ptSegDist(snapPt, clipped[0], clipped[1]);
-        const turnFade = Math.max(0.5, 1 - turnCost / maxDist);
-        const intensity = Math.max(0.1, (1 - (dist / maxDist) * 0.9) * turnFade);
+        const intensity = Math.max(0.3, 1 - (dist / maxDist) * 0.7);
 
         const key = `${ri}|${si}`;
         const existing = best.get(key);
         if (!existing || intensity > existing.intensity) {
-          best.set(key, { intensity, depth: sensor.depth, coords: clipped, snapPt, maxDist, turnCost });
+          best.set(key, { intensity, depth: sensor.depth, coords: clipped });
         }
       }
     }
   }
 
-  // Subdivide winning segments into ~5 m pieces for smooth gradient
   const features: GeoJSON.Feature[] = [];
   for (const [, entry] of best) {
-    const [a, b] = entry.coords;
-    const segLen = ptDist(a, b);
-    const numPieces = Math.max(1, Math.ceil(segLen / 5));
-
-    for (let p = 0; p < numPieces; p++) {
-      const t0 = p / numPieces;
-      const t1 = (p + 1) / numPieces;
-      const p0 = [a[0] + t0 * (b[0] - a[0]), a[1] + t0 * (b[1] - a[1])];
-      const p1 = [a[0] + t1 * (b[0] - a[0]), a[1] + t1 * (b[1] - a[1])];
-      const mid = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
-
-      const dist = ptDist(entry.snapPt, mid);
-      const turnFade = Math.max(0.5, 1 - entry.turnCost / entry.maxDist);
-      const intensity = Math.max(0.1, (1 - (dist / entry.maxDist) * 0.9) * turnFade);
-
-      features.push({
-        type: "Feature",
-        geometry: { type: "LineString", coordinates: [p0, p1] },
-        properties: { intensity, depth: entry.depth },
-      });
-    }
+    features.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: entry.coords },
+      properties: { intensity: entry.intensity, depth: entry.depth },
+    });
   }
 
   return features;
