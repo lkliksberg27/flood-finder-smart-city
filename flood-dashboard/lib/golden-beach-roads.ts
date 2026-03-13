@@ -152,8 +152,8 @@ export function calculateFloodFeatures(
   const features: GeoJSON.Feature[] = [];
   // Track best intensity per segment to avoid duplicates
   const segKey = (a: number[], b: number[]) =>
-    `${a[0].toFixed(6)},${a[1].toFixed(6)}-${b[0].toFixed(6)},${b[1].toFixed(6)}`;
-  const bestIntensity = new Map<string, { intensity: number; depth: number }>();
+    `${a[0].toFixed(6)},${a[1].toFixed(6)}|${b[0].toFixed(6)},${b[1].toFixed(6)}`;
+  const bestIntensity = new Map<string, { intensity: number; depth: number; a: number[]; b: number[] }>();
 
   for (const sensor of flooding) {
     const sensorPt = [sensor.lng, sensor.lat];
@@ -189,25 +189,21 @@ export function calculateFloodFeatures(
         const key = segKey(a, b);
         const existing = bestIntensity.get(key);
         if (!existing || intensity > existing.intensity) {
-          bestIntensity.set(key, { intensity, depth: sensor.depth });
+          bestIntensity.set(key, { intensity, depth: sensor.depth, a, b });
         }
       }
     }
   }
 
   // Convert to GeoJSON features
-  for (const [key, props] of bestIntensity) {
-    const [aStr, bStr] = key.split("-");
-    const [aLng, aLat] = aStr.split(",").map(Number);
-    const [bLng, bLat] = bStr.split(",").map(Number);
-
+  for (const [, entry] of bestIntensity) {
     features.push({
       type: "Feature",
       geometry: {
         type: "LineString",
-        coordinates: [[aLng, aLat], [bLng, bLat]],
+        coordinates: [entry.a, entry.b],
       },
-      properties: props,
+      properties: { intensity: entry.intensity, depth: entry.depth },
     });
   }
 
