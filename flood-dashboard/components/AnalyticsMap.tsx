@@ -52,8 +52,8 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(containerRef.current);
 
-    map.on("load", () => {
-      // Force tile rendering — nudge the map to trigger first paint
+    const initSources = () => {
+      if (map.getSource("analytics-dots")) return;
       requestAnimationFrame(() => {
         map.resize();
         map.panBy([1, 0], { duration: 0 });
@@ -208,9 +208,24 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       map.on("mouseleave", "analytics-dots-layer", () => {
         map.getCanvas().style.cursor = "";
       });
-    });
+    };
+
+    map.on("load", initSources);
+
+    // Fallback: if load event doesn't fire within 3s, force init
+    const fallbackTimer = setTimeout(() => {
+      if (!map.getSource("analytics-dots")) {
+        map.resize();
+        if (map.isStyleLoaded()) {
+          initSources();
+        } else {
+          map.once("style.load", initSources);
+        }
+      }
+    }, 3000);
 
     return () => {
+      clearTimeout(fallbackTimer);
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
