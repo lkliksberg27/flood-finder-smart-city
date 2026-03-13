@@ -501,10 +501,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           if (roads.length > 0) cachedRoadsRef.current = roads;
         }
         const floodingDevices = devices.filter(d => (depths[d.device_id] ?? 0) > 0);
-        console.log("[FloodViz]", { roads: roads.length, devices: devices.length, flooding: floodingDevices.length, depthKeys: Object.keys(depths).length });
-        if (roads.length === 0) return;
+        console.log("[FloodViz] roads=" + roads.length + " devices=" + devices.length + " flooding=" + floodingDevices.length + " depthKeys=" + Object.keys(depths).length);
+        if (roads.length === 0) { console.log("[FloodViz] NO ROADS - bailing"); return; }
         const features = calculateFloodFeatures(roads, devices, depths);
-        console.log("[FloodViz] features:", features.length);
+        console.log("[FloodViz] features=" + features.length + " roadSrc=" + !!roadSrc);
         if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) {
         console.error("[FloodViz] updateFlood error:", err);
