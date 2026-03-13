@@ -335,7 +335,6 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     // Query road geometry and calculate flood water
     const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource | undefined;
     let cancelled = false;
-    const timers: ReturnType<typeof setTimeout>[] = [];
 
     const updateFlood = () => {
       if (cancelled) return;
@@ -349,16 +348,22 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       }
     };
 
-    // Run immediately with fallback roads, then re-run when tiles load
+    // Retry updateFlood every 2s until roads are found (tiles may load late)
+    let floodResolved = false;
+    const floodRetry = setInterval(() => {
+      if (cancelled || floodResolved) { clearInterval(floodRetry); return; }
+      const roads = queryMapboxRoads(map, devices);
+      if (roads.length > 0) {
+        floodResolved = true;
+        clearInterval(floodRetry);
+        updateFlood();
+      }
+    }, 2000);
     updateFlood();
-    const onIdle = () => { if (!cancelled) updateFlood(); };
-    map.once("idle", onIdle);
-    timers.push(setTimeout(() => { if (!cancelled) updateFlood(); }, 3000));
 
     return () => {
       cancelled = true;
-      timers.forEach(clearTimeout);
-      map.off("idle", onIdle);
+      clearInterval(floodRetry);
     };
   }, [devices, events, floodCounts, mapReady]);
 
