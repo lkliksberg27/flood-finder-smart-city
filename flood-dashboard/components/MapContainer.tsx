@@ -320,20 +320,21 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     map.on("load", initSources);
 
-    // Fallback: if load event doesn't fire within 3s, force init
-    const fallbackTimer = setTimeout(() => {
-      if (!map.getSource("device-dots")) {
-        map.resize();
-        if (map.isStyleLoaded()) {
-          initSources();
-        } else {
-          map.once("style.load", initSources);
-        }
+    // Fallback: poll every 1s — if style loaded but load event never fired, force init
+    const fallbackTimer = setInterval(() => {
+      if (map.getSource("device-dots")) {
+        clearInterval(fallbackTimer);
+        return;
       }
-    }, 3000);
+      map.resize();
+      if (map.isStyleLoaded()) {
+        clearInterval(fallbackTimer);
+        initSources();
+      }
+    }, 1000);
 
     return () => {
-      clearTimeout(fallbackTimer);
+      clearInterval(fallbackTimer);
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
