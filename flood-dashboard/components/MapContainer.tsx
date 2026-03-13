@@ -319,41 +319,83 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     map.on("load", initSources);
 
-    // Fallback: Mapbox render loop stalls in Next.js dynamic imports.
-    // Kick it at 100ms until tiles load, then stop.
-    let fallbackTicks = 0;
-    const fallbackTimer = setInterval(() => {
-      fallbackTicks++;
+    // --- Render-loop stall fix for Next.js dynamic imports ---
+    // Mapbox render loop stalls with _styleDirty=true but no rAF scheduled.
+    // The manual console fix (triggerRepaint + _render at 100ms) works AFTER
+    // style.load has fired. So we wait for that event before kicking.
 
+    let renderKickTimer: ReturnType<typeof setInterval> | null = null;
+
+    // Early source init: poll for style readiness
+    const earlyInitTimer = setInterval(() => {
+      if (map.getSource("device-dots")) { clearInterval(earlyInitTimer); return; }
       try {
-        map.triggerRepaint();
-        (map as unknown as { _render: () => void })._render();
+        const s = (map as unknown as { style?: { _loaded?: boolean } }).style;
+        if (s?._loaded || map.isStyleLoaded()) {
+          initSources();
+          clearInterval(earlyInitTimer);
+        }
+      } catch {}
+    }, 200);
+
+    // After style loads, kick the render loop (matches manual console fix timing)
+    map.once("style.load", () => {
+      // Init sources immediately if not done
+      if (!map.getSource("device-dots")) initSources();
+
+      // Zoom bounce forces tile requests for this viewport
+      try {
+        map.resize();
+        const z = map.getZoom();
+        map.setZoom(z + 0.01);
+        setTimeout(() => { try { map.setZoom(z); } catch {} }, 50);
       } catch {}
 
-      // Pan nudge forces tile fetching on first 20 ticks (2s)
-      if (fallbackTicks <= 20) {
-        map.panBy([0.1, 0], { duration: 0 });
-        map.panBy([-0.1, 0], { duration: 0 });
-      }
-
-      // Init sources once style definition is loaded
-      if (!map.getSource("device-dots")) {
+      // Kick render loop at 100ms — same as the manual fix that works
+      let ticks = 0;
+      renderKickTimer = setInterval(() => {
+        ticks++;
         try {
-          const styleLoaded = (map as unknown as { style?: { _loaded?: boolean } }).style?._loaded;
-          if (styleLoaded || map.isStyleLoaded()) {
-            initSources();
-          }
+          map.triggerRepaint();
+          (map as unknown as { _render: () => void })._render();
         } catch {}
-      }
+        if (ticks > 100) {
+          if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
+        }
+      }, 100);
+    });
 
-      // Stop after 10s or once fully loaded
-      if (fallbackTicks > 100 || (map.getSource("device-dots") && map.isStyleLoaded())) {
-        clearInterval(fallbackTimer);
+    // Last resort: if style.load never fires within 5s, force everything
+    const lastResortTimer = setTimeout(() => {
+      if (!map.getSource("device-dots")) {
+        try { initSources(); } catch {}
       }
-    }, 100);
+      if (!renderKickTimer) {
+        let ticks = 0;
+        renderKickTimer = setInterval(() => {
+          ticks++;
+          try {
+            map.triggerRepaint();
+            (map as unknown as { _render: () => void })._render();
+          } catch {}
+          if (ticks > 100) {
+            if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
+          }
+        }, 100);
+      }
+      // Hard zoom bounce
+      try {
+        const c = map.getCenter();
+        const z = map.getZoom();
+        map.jumpTo({ center: [c.lng, c.lat + 0.001], zoom: z });
+        setTimeout(() => { try { map.jumpTo({ center: c, zoom: z }); } catch {} }, 200);
+      } catch {}
+    }, 5000);
 
     return () => {
-      clearInterval(fallbackTimer);
+      clearInterval(earlyInitTimer);
+      if (renderKickTimer) clearInterval(renderKickTimer);
+      clearTimeout(lastResortTimer);
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
