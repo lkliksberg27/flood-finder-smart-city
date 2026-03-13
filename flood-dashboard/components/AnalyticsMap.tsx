@@ -72,36 +72,35 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Flood water glow (soft outer halo for smooth gradient)
+      // Subtle glow underneath flood water
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1a4a7a", 0.5, "#2874a6", 1, "#3498db"],
+          "line-color": "#2980b9",
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.08, 10, 0.3, 16, 0.6, 22, 1, 30],
+            0.3, 8, 1, 14],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.08, 0.04, 0.2, 0.08, 0.5, 0.12, 1, 0.18],
-          "line-blur": 8,
+            0.3, 0.06, 1, 0.15],
+          "line-blur": 6,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Flood water main line (smooth gradient)
+      // Crisp flood water — colors the road itself
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.08, "#1a5276", 0.25, "#2180a8", 0.5, "#3498db", 0.75, "#5dade2", 1, "#85c1e9"],
+            0.3, "#1a5276", 0.6, "#2e86c1", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.08, 2, 0.25, 3.5, 0.5, 5, 0.75, 7, 1, 10],
+            0.3, 3, 0.6, 4.5, 1, 6],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.08, 0.25, 0.25, 0.4, 0.5, 0.55, 0.75, 0.65, 1, 0.8],
-          "line-blur": 1.5,
+            0.3, 0.5, 0.6, 0.7, 1, 0.85],
+          "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });

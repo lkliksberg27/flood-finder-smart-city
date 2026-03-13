@@ -1,12 +1,10 @@
 /**
  * Flood visualization using actual Mapbox road geometry ONLY.
  *
- * Sensor is on the sidewalk edge — snaps to nearest road vertex.
- * Water spreads from that point in ALL directions along connected roads.
- * BFS flood-fill at intersections. Gradient fades with distance.
- *
- * Physics: H_water = H_sensor + depth.
- * Walk along roads while H_ground <= H_water.
+ * For each flooding sensor:
+ * 1. Find the exact closest point on any road (snap point)
+ * 2. Color nearby road polylines within a tight radius
+ * 3. Full road polylines — no choppy 2-point segments
  */
 import type { Device } from "./types";
 import type mapboxgl from "mapbox-gl";
@@ -23,15 +21,44 @@ function ptDist(a: number[], b: number[]): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+/**
+ * Perpendicular distance from point p to segment [a, b] in meters.
+ * Uses proper projection onto the segment (not just endpoint/midpoint).
+ */
+function ptSegDist(p: number[], a: number[], b: number[]): number {
+  const lat = (p[1] + a[1] + b[1]) / 3;
+  const cL = cosLat(lat);
+  const S = 111320;
+  const px = p[0] * S * cL, py = p[1] * S;
+  const ax = a[0] * S * cL, ay = a[1] * S;
+  const bx = b[0] * S * cL, by = b[1] * S;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 0.01) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+}
+
+/** Minimum distance from point p to any part of a road polyline. */
+function ptRoadDist(p: number[], road: number[][]): number {
+  let min = Infinity;
+  for (let i = 0; i < road.length - 1; i++) {
+    const d = ptSegDist(p, road[i], road[i + 1]);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
 function dedupKey(coords: number[][]): string {
   const s = coords[0];
   const e = coords[coords.length - 1];
-  return `${s[0].toFixed(6)},${s[1].toFixed(6)}-${e[0].toFixed(6)},${e[1].toFixed(6)}`;
+  return `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
 }
 
 /**
  * Query real road geometry from Mapbox vector tiles.
- * Returns raw tile segments — NO merging.
+ * Returns full road polylines from tiles.
  */
 export function queryMapboxRoads(
   map: mapboxgl.Map,
@@ -54,7 +81,7 @@ export function queryMapboxRoads(
 
   for (const device of devices) {
     const point = map.project([device.lng, device.lat]);
-    const size = 120;
+    const size = 80;
     const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
       [point.x - size, point.y - size],
       [point.x + size, point.y + size],
@@ -93,37 +120,13 @@ export function queryMapboxRoads(
   return allCoords;
 }
 
-/** Estimate ground elevation at a point via IDW from sensor data. */
-function estimateElevation(
-  lng: number,
-  lat: number,
-  elevSensors: { lng: number; lat: number; elev: number }[],
-): number {
-  if (elevSensors.length === 0) return 0;
-  let totalW = 0;
-  let totalE = 0;
-  for (const s of elevSensors) {
-    const dx = (s.lng - lng) * 111320 * cosLat(lat);
-    const dy = (s.lat - lat) * 111320;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const w = 1 / Math.max(dist, 3);
-    totalW += w;
-    totalE += w * s.elev;
-  }
-  return totalW > 0 ? totalE / totalW : 0;
-}
-
 /**
- * Flood water on roads within range of each flooding sensor.
- *
- * Mapbox tile segments typically have only 2 vertices, making BFS-walk
- * impractical. Instead, we use a distance-based approach:
+ * Flood water on roads — tight radius, full road polylines.
  *
  * For each flooding sensor:
- * 1. Compute H_water = sensor_elev + depth
- * 2. Check every road segment: include if midpoint is within maxDist
- *    AND estimated ground elevation <= H_water
- * 3. Gradient intensity fades with distance from sensor
+ * 1. Find closest point on any road (must be within 30m)
+ * 2. Include full road polylines within a tight radius scaled by depth
+ * 3. Intensity fades with distance from sensor
  */
 export function calculateFloodFeatures(
   roads: number[][][],
@@ -135,75 +138,56 @@ export function calculateFloodFeatures(
     .map((d) => ({
       lng: d.lng,
       lat: d.lat,
-      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
       depth: depths[d.device_id] ?? 0,
     }));
   if (flooding.length === 0 || roads.length === 0) return [];
 
-  const elevSensors = devices
-    .filter((d) => d.altitude_baro != null)
-    .map((d) => ({
-      lng: d.lng,
-      lat: d.lat,
-      elev: (d.altitude_baro ?? 0) - (d.baseline_distance_cm ?? 0) / 100,
-    }));
-
-  const maxDepth = Math.max(1, ...flooding.map((f) => f.depth));
-  const features: GeoJSON.Feature[] = [];
-  // Track best intensity per segment to avoid duplicates
-  const segKey = (a: number[], b: number[]) =>
-    `${a[0].toFixed(6)},${a[1].toFixed(6)}|${b[0].toFixed(6)},${b[1].toFixed(6)}`;
-  const bestIntensity = new Map<string, { intensity: number; depth: number; a: number[]; b: number[] }>();
+  // Track best intensity per road polyline (by index)
+  const bestPerRoad = new Map<number, { intensity: number; depth: number }>();
 
   for (const sensor of flooding) {
     const sensorPt = [sensor.lng, sensor.lat];
-    const H_water = sensor.elev + sensor.depth / 100;
-    const maxDist = Math.min(200, 40 + sensor.depth * 5);
-    const depthRatio = Math.min(1, Math.max(0.2, sensor.depth / maxDepth));
 
+    // Find snap distance: closest point on ANY road to this sensor
+    let snapDist = Infinity;
     for (const road of roads) {
-      for (let i = 0; i < road.length - 1; i++) {
-        const a = road[i];
-        const b = road[i + 1];
+      const d = ptRoadDist(sensorPt, road);
+      if (d < snapDist) snapDist = d;
+    }
 
-        // Use closest distance to sensor: min of vertex A, vertex B, midpoint
-        const dA = ptDist(sensorPt, a);
-        const dB = ptDist(sensorPt, b);
-        const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        const dMid = ptDist(sensorPt, mid);
-        const distToSensor = Math.min(dA, dB, dMid);
+    // Sensor must be within 30m of a road
+    if (snapDist > 30) continue;
 
-        if (distToSensor > maxDist) continue;
+    // Tight spread: 20m base + 1.5m per cm depth, max 60m
+    const maxDist = Math.min(60, 20 + sensor.depth * 1.5);
 
-        // Skip segments very far above water (but allow close ones through)
-        if (distToSensor > 15) {
-          const H_ground = estimateElevation(mid[0], mid[1], elevSensors);
-          if (H_ground > H_water) continue;
-        }
+    // Check each road polyline
+    for (let ri = 0; ri < roads.length; ri++) {
+      const road = roads[ri];
+      const dist = ptRoadDist(sensorPt, road);
 
-        // Gradient: 1.0 at sensor → 0.15 at max distance
-        const distFade = 1 - (distToSensor / Math.max(maxDist, 1)) * 0.85;
-        const intensity = Math.min(1, Math.max(0.08, depthRatio * distFade));
+      if (dist > maxDist) continue;
 
-        // Keep the highest intensity per segment
-        const key = segKey(a, b);
-        const existing = bestIntensity.get(key);
-        if (!existing || intensity > existing.intensity) {
-          bestIntensity.set(key, { intensity, depth: sensor.depth, a, b });
-        }
+      // Intensity: 1.0 at sensor → 0.3 at max distance
+      const intensity = Math.max(0.3, 1 - (dist / maxDist) * 0.7);
+
+      const existing = bestPerRoad.get(ri);
+      if (!existing || intensity > existing.intensity) {
+        bestPerRoad.set(ri, { intensity, depth: sensor.depth });
       }
     }
   }
 
-  // Convert to GeoJSON features
-  for (const [, entry] of bestIntensity) {
+  // Convert to GeoJSON features using FULL road polylines
+  const features: GeoJSON.Feature[] = [];
+  for (const [ri, props] of bestPerRoad) {
     features.push({
       type: "Feature",
       geometry: {
         type: "LineString",
-        coordinates: [entry.a, entry.b],
+        coordinates: roads[ri],
       },
-      properties: { intensity: entry.intensity, depth: entry.depth },
+      properties: props,
     });
   }
 
