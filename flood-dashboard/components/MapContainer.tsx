@@ -170,17 +170,17 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Subtle glow underneath flood water
+      // Glow underneath flood water
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#2980b9",
+          "line-color": "#3498db",
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 8, 1, 14],
+            0.3, 12, 1, 20],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 0.06, 1, 0.15],
+            0.3, 0.15, 1, 0.35],
           "line-blur": 6,
         },
         layout: { "line-cap": "round", "line-join": "round" },
@@ -193,11 +193,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, "#1a5276", 0.6, "#2e86c1", 1, "#5dade2"],
+            0.3, "#2471a3", 0.6, "#3498db", 1, "#85c1e9"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 3, 0.6, 4.5, 1, 6],
+            0.3, 4, 0.6, 6, 1, 8],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 0.5, 0.6, 0.7, 1, 0.85],
+            0.3, 0.7, 0.6, 0.85, 1, 0.95],
           "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
@@ -369,12 +369,12 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       // Init sources immediately if not done
       if (!map.getSource("device-dots")) initSources();
 
-      // Zoom bounce forces tile requests for this viewport
+      // Aggressive zoom bounce forces tile requests for this viewport
       try {
         map.resize();
         const z = map.getZoom();
-        map.setZoom(z + 0.01);
-        setTimeout(() => { try { map.setZoom(z); } catch {} }, 50);
+        map.setZoom(z + 0.5);
+        setTimeout(() => { try { map.setZoom(z); } catch {} }, 150);
       } catch {}
 
       // Kick render loop at 100ms — same as the manual fix that works
@@ -385,7 +385,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           map.triggerRepaint();
           (map as unknown as { _render: () => void })._render();
         } catch {}
-        if (ticks > 100) {
+        // Run for 30 seconds (300 ticks) instead of 10
+        if (ticks > 300) {
           if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
         }
       }, 100);
