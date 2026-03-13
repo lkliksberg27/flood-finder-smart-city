@@ -211,22 +211,19 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     map.on("load", initSources);
 
-    // Fallback: the Mapbox render loop can stall (frameId stuck at ~5,
-    // _styleDirty=true but no new requestAnimationFrame scheduled).
-    // Aggressively kick the render loop for up to 15s to ensure tiles load.
+    // Fallback: Mapbox render loop stalls in Next.js dynamic imports.
     let fallbackTicks = 0;
     const fallbackTimer = setInterval(() => {
       fallbackTicks++;
 
-      const renderFn = (map as unknown as { _render: () => void })._render;
       try {
         map.triggerRepaint();
-        for (let i = 0; i < 3; i++) renderFn.call(map);
+        (map as unknown as { _render: () => void })._render();
       } catch {}
 
-      if (fallbackTicks <= 4) {
-        map.panBy([1, 0], { duration: 0 });
-        map.panBy([-1, 0], { duration: 0 });
+      if (fallbackTicks <= 20) {
+        map.panBy([0.1, 0], { duration: 0 });
+        map.panBy([-0.1, 0], { duration: 0 });
       }
 
       if (!map.getSource("analytics-dots")) {
@@ -238,7 +235,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         } catch {}
       }
 
-      if (fallbackTicks > 30 || (map.getSource("analytics-dots") && map.isStyleLoaded())) {
+      if (fallbackTicks > 100 || (map.getSource("analytics-dots") && map.isStyleLoaded())) {
         clearInterval(fallbackTimer);
       }
     }, 500);
