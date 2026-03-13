@@ -319,24 +319,21 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     map.on("load", initSources);
 
-    // Fallback: the Mapbox render loop can stall (frameId stuck at ~5,
-    // _styleDirty=true but no new requestAnimationFrame scheduled).
-    // Aggressively kick the render loop for up to 15s to ensure tiles load.
+    // Fallback: Mapbox render loop stalls in Next.js dynamic imports.
+    // Kick it at 100ms until tiles load, then stop.
     let fallbackTicks = 0;
     const fallbackTimer = setInterval(() => {
       fallbackTicks++;
 
-      // Burst-render multiple frames to catch up on stalled loop
-      const renderFn = (map as unknown as { _render: () => void })._render;
       try {
         map.triggerRepaint();
-        for (let i = 0; i < 3; i++) renderFn.call(map);
+        (map as unknown as { _render: () => void })._render();
       } catch {}
 
-      // Pan nudge forces tile fetching on first few ticks
-      if (fallbackTicks <= 4) {
-        map.panBy([1, 0], { duration: 0 });
-        map.panBy([-1, 0], { duration: 0 });
+      // Pan nudge forces tile fetching on first 20 ticks (2s)
+      if (fallbackTicks <= 20) {
+        map.panBy([0.1, 0], { duration: 0 });
+        map.panBy([-0.1, 0], { duration: 0 });
       }
 
       // Init sources once style definition is loaded
@@ -349,11 +346,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         } catch {}
       }
 
-      // Stop after 15s or once map is fully rendered
-      if (fallbackTicks > 30 || (map.getSource("device-dots") && map.isStyleLoaded())) {
+      // Stop after 10s or once fully loaded
+      if (fallbackTicks > 100 || (map.getSource("device-dots") && map.isStyleLoaded())) {
         clearInterval(fallbackTimer);
       }
-    }, 500);
+    }, 100);
 
     return () => {
       clearInterval(fallbackTimer);
