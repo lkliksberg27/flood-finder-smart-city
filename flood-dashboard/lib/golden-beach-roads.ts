@@ -133,6 +133,14 @@ export function queryMapboxRoads(
   const allCoords: number[][][] = [];
   const seen = new Set<string>();
 
+  // Debug: try querying ALL features in the viewport first
+  try {
+    const canvas = map.getCanvas();
+    const vp: [mapboxgl.PointLike, mapboxgl.PointLike] = [[0, 0], [canvas.width, canvas.height]];
+    const allFeats = map.queryRenderedFeatures(vp, { layers: roadLayerIds });
+    console.log("[queryMapboxRoads] total road features in viewport:", allFeats.length, "canvas:", canvas.width, "x", canvas.height);
+  } catch (e) { console.log("[queryMapboxRoads] viewport query failed:", e); }
+
   for (const device of devices) {
     const point = map.project([device.lng, device.lat]);
     const size = 200;
@@ -142,6 +150,9 @@ export function queryMapboxRoads(
     ];
     try {
       const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+      if (features.length === 0) {
+        console.log("[queryMapboxRoads] device", device.device_id, "at pixel", Math.round(point.x), Math.round(point.y), "→ 0 features (bbox size:", size, ")");
+      }
       for (const f of features) {
         if (f.geometry.type === "LineString") {
           const coords = (f.geometry as GeoJSON.LineString).coordinates as number[][];
