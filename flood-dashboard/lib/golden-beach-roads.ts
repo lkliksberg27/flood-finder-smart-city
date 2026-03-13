@@ -1,12 +1,12 @@
 /**
  * Flood visualization using actual Mapbox road geometry ONLY.
  *
- * No synthetic roads. No merging across gaps. No extrapolation.
- * Each road segment from Mapbox tiles is walked independently.
- * Water NEVER crosses non-road areas.
+ * Sensor is on the sidewalk edge — snaps to nearest road within 2.5m.
+ * Water spreads from that point in ALL directions along connected roads.
+ * BFS flood-fill at intersections. Gradient fades with distance.
  *
  * Physics: H_water = H_sensor + depth.
- * Walk along each tile road segment while H_ground <= H_water.
+ * Walk along roads while H_ground <= H_water.
  */
 import type { Device } from "./types";
 import type mapboxgl from "mapbox-gl";
@@ -22,23 +22,20 @@ function ptDist(a: number[], b: number[]): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-/**
- * Project point P onto line segment A→B.
- * Returns the projected point, distance, parametric t, and segment index.
- */
+/** Project point P onto segment A→B, return projected point + distance. */
 function projectOntoSegment(
   p: number[],
   a: number[],
   b: number[],
-): { point: number[]; dist: number; t: number } {
+): { point: number[]; dist: number } {
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
   const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return { point: a, dist: ptDist(p, a), t: 0 };
+  if (lenSq === 0) return { point: a, dist: ptDist(p, a) };
   let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
   t = Math.max(0, Math.min(1, t));
   const proj = [a[0] + t * dx, a[1] + t * dy];
-  return { point: proj, dist: ptDist(p, proj), t };
+  return { point: proj, dist: ptDist(p, proj) };
 }
 
 function dedupKey(coords: number[][]): string {
@@ -49,8 +46,7 @@ function dedupKey(coords: number[][]): string {
 
 /**
  * Query real road geometry from Mapbox vector tiles.
- * Returns raw tile segments — NO merging, so lines never jump across water.
- * Returns empty array if tiles aren't loaded yet — caller should retry.
+ * Returns raw tile segments — NO merging.
  */
 export function queryMapboxRoads(
   map: mapboxgl.Map,
@@ -73,8 +69,7 @@ export function queryMapboxRoads(
 
   for (const device of devices) {
     const point = map.project([device.lng, device.lat]);
-    // Tight bbox — only roads actually near the sensor, not across waterways
-    const size = 100;
+    const size = 120;
     const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
       [point.x - size, point.y - size],
       [point.x + size, point.y + size],
@@ -94,7 +89,6 @@ export function queryMapboxRoads(
           seen.add(key);
           allCoords.push(coords);
         } else if (f.geometry.type === "MultiLineString") {
-          // Handle ALL parts, not just the first
           const multi = (f.geometry as GeoJSON.MultiLineString)
             .coordinates as number[][][];
           for (const coords of multi) {
@@ -111,13 +105,10 @@ export function queryMapboxRoads(
     }
   }
 
-  // Return raw segments — NO merging. Each tile segment is a valid road piece.
   return allCoords;
 }
 
-/**
- * Estimate ground elevation at a point via IDW from sensor data.
- */
+/** Estimate ground elevation at a point via IDW from sensor data. */
 function estimateElevation(
   lng: number,
   lat: number,
@@ -137,15 +128,12 @@ function estimateElevation(
 }
 
 /**
- * Flood water strictly on the ONE road the sensor sits on.
+ * Flood water using BFS spread from sensor position on road.
  *
- * For each flooding sensor:
- * 1. Find the single closest road (the one it's physically on)
- * 2. Walk along that road using WSE model
- * 3. Spread distance scales with depth — shallow floods stay local
- *
- * H_water = H_sensor + depth.
- * Walk while H_ground <= H_water.
+ * 1. Snap sensor to nearest road within 2.5m (it's on the sidewalk edge)
+ * 2. BFS flood-fill: spread in all directions along connected roads
+ * 3. Stop when H_ground > H_water or distance exceeds max
+ * 4. Generate gradient sub-segments that fade with distance
  */
 export function calculateFloodFeatures(
   roads: number[][][],
@@ -175,104 +163,160 @@ export function calculateFloodFeatures(
   const features: GeoJSON.Feature[] = [];
 
   for (const sensor of flooding) {
-    const sensorPt: number[] = [sensor.lng, sensor.lat];
+    const sensorPt = [sensor.lng, sensor.lat];
     const H_water = sensor.elev + sensor.depth / 100;
-
-    // Spread scales with depth: shallow (<10cm) ~60m, moderate ~120m, deep ~200m
     const maxWalk = Math.min(200, 40 + sensor.depth * 5);
+    const depthRatio = Math.min(1, Math.max(0.2, sensor.depth / maxDepth));
 
-    // Snap sensor onto the nearest point on any road edge — not just vertices.
-    // The sensor is on the sidewalk edge, basically right on the road.
-    let bestRoad: number[][] | null = null;
+    // 1. Snap sensor to nearest road edge — must be within 2.5m
+    let bestRoadIdx = -1;
+    let bestSegIdx = -1;
+    let bestProj = sensorPt;
     let bestDist = Infinity;
-    let bestSegIdx = -1; // index of segment start vertex
-    let bestProj: number[] = sensorPt; // projected point on road
 
-    for (const road of roads) {
-      for (let i = 0; i < road.length - 1; i++) {
-        const { point, dist } = projectOntoSegment(sensorPt, road[i], road[i + 1]);
+    for (let r = 0; r < roads.length; r++) {
+      for (let i = 0; i < roads[r].length - 1; i++) {
+        const { point, dist } = projectOntoSegment(
+          sensorPt,
+          roads[r][i],
+          roads[r][i + 1],
+        );
         if (dist < bestDist) {
           bestDist = dist;
-          bestRoad = road;
+          bestRoadIdx = r;
           bestSegIdx = i;
           bestProj = point;
         }
       }
     }
 
-    // Sensor is basically on the road — 15m is generous
-    if (!bestRoad || bestDist > 15) continue;
+    if (bestRoadIdx === -1 || bestDist > 2.5) continue;
 
-    // Start flood right at the sensor's projected position on the road.
-    // Walk forward from bestSegIdx+1 onward, backward from bestSegIdx down.
-    const seg: number[][] = [bestProj];
+    // 2. BFS flood-fill along road network from sensor position
+    const ptKey = (p: number[]) =>
+      `${p[0].toFixed(5)},${p[1].toFixed(5)}`;
+    const visitedEnds = new Set<string>();
 
-    // Walk forward along road from the snap point
-    let fwdDist = ptDist(bestProj, bestRoad[bestSegIdx + 1]);
-    const fwdFirst = bestRoad[bestSegIdx + 1];
-    const H_ground_first = estimateElevation(fwdFirst[0], fwdFirst[1], elevSensors);
-    if (!(H_ground_first > H_water && fwdDist > 20)) {
-      seg.push(fwdFirst);
-      for (let i = bestSegIdx + 2; i < bestRoad.length && fwdDist < maxWalk; i++) {
-        const stepDist = ptDist(bestRoad[i - 1], bestRoad[i]);
-        fwdDist += stepDist;
-
-        const H_ground = estimateElevation(bestRoad[i][0], bestRoad[i][1], elevSensors);
-
-        if (H_ground > H_water && fwdDist > 20) {
-          const prevH = estimateElevation(bestRoad[i - 1][0], bestRoad[i - 1][1], elevSensors);
-          const rise = H_ground - prevH;
-          if (rise > 0.001) {
-            const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
-            seg.push([
-              bestRoad[i - 1][0] + (bestRoad[i][0] - bestRoad[i - 1][0]) * frac,
-              bestRoad[i - 1][1] + (bestRoad[i][1] - bestRoad[i - 1][1]) * frac,
-            ]);
-          }
-          break;
-        }
-        seg.push(bestRoad[i]);
-      }
+    interface WalkTask {
+      road: number[][];
+      startIdx: number;
+      direction: 1 | -1;
+      entryPt: number[];
+      baseDist: number;
     }
 
-    // Walk backward along road from the snap point
-    let bwdDist = ptDist(bestProj, bestRoad[bestSegIdx]);
-    const bwdFirst = bestRoad[bestSegIdx];
-    const H_ground_bwd = estimateElevation(bwdFirst[0], bwdFirst[1], elevSensors);
-    if (!(H_ground_bwd > H_water && bwdDist > 20)) {
-      seg.unshift(bwdFirst);
-      for (let i = bestSegIdx - 1; i >= 0 && bwdDist < maxWalk; i--) {
-        const stepDist = ptDist(bestRoad[i + 1], bestRoad[i]);
-        bwdDist += stepDist;
-
-        const H_ground = estimateElevation(bestRoad[i][0], bestRoad[i][1], elevSensors);
-
-        if (H_ground > H_water && bwdDist > 20) {
-          const prevH = estimateElevation(bestRoad[i + 1][0], bestRoad[i + 1][1], elevSensors);
-          const rise = H_ground - prevH;
-          if (rise > 0.001) {
-            const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
-            seg.unshift([
-              bestRoad[i + 1][0] + (bestRoad[i][0] - bestRoad[i + 1][0]) * frac,
-              bestRoad[i + 1][1] + (bestRoad[i][1] - bestRoad[i + 1][1]) * frac,
-            ]);
-          }
-          break;
-        }
-        seg.unshift(bestRoad[i]);
-      }
-    }
-
-    if (seg.length < 2) continue;
-
-    features.push({
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: seg },
-      properties: {
-        intensity: Math.min(1, Math.max(0.15, sensor.depth / maxDepth)),
-        depth: sensor.depth,
+    const queue: WalkTask[] = [
+      // Forward along starting road
+      {
+        road: roads[bestRoadIdx],
+        startIdx: bestSegIdx + 1,
+        direction: 1,
+        entryPt: bestProj,
+        baseDist: 0,
       },
-    });
+      // Backward along starting road
+      {
+        road: roads[bestRoadIdx],
+        startIdx: bestSegIdx,
+        direction: -1,
+        entryPt: bestProj,
+        baseDist: 0,
+      },
+    ];
+
+    while (queue.length > 0) {
+      const task = queue.shift()!;
+      if (task.baseDist >= maxWalk) continue;
+
+      // Walk along road, building coords away from sensor
+      const coords: number[][] = [task.entryPt];
+      let dist = task.baseDist;
+      let stoppedByElevation = false;
+
+      const step = task.direction;
+      const limit = step === 1 ? task.road.length : -1;
+
+      for (let i = task.startIdx; i !== limit && dist < maxWalk; i += step) {
+        const prev = coords[coords.length - 1];
+        const curr = task.road[i];
+        const segLen = ptDist(prev, curr);
+        dist += segLen;
+
+        const H_ground = estimateElevation(curr[0], curr[1], elevSensors);
+
+        if (H_ground > H_water && dist > task.baseDist + 8) {
+          // Interpolate boundary point
+          const prevH = estimateElevation(prev[0], prev[1], elevSensors);
+          const rise = H_ground - prevH;
+          if (rise > 0.001) {
+            const frac = Math.max(0, Math.min(1, (H_water - prevH) / rise));
+            coords.push([
+              prev[0] + (curr[0] - prev[0]) * frac,
+              prev[1] + (curr[1] - prev[1]) * frac,
+            ]);
+          }
+          stoppedByElevation = true;
+          break;
+        }
+        coords.push(curr);
+      }
+
+      // 3. Generate gradient sub-segments from this walk
+      if (coords.length >= 2) {
+        let cumDist = task.baseDist;
+        for (let i = 0; i < coords.length - 1; i++) {
+          const segLen = ptDist(coords[i], coords[i + 1]);
+          const midDist = cumDist + segLen / 2;
+          cumDist += segLen;
+
+          // Fade: 1.0 at sensor → 0.15 at max distance
+          const distFade = 1 - (midDist / Math.max(maxWalk, 1)) * 0.85;
+          const intensity = Math.min(1, Math.max(0.08, depthRatio * distFade));
+
+          features.push({
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: [coords[i], coords[i + 1]],
+            },
+            properties: { intensity, depth: sensor.depth },
+          });
+        }
+      }
+
+      // 4. At road ends, find connected roads and continue spreading
+      if (!stoppedByElevation && coords.length >= 2 && dist < maxWalk) {
+        const endPt = coords[coords.length - 1];
+        const ek = ptKey(endPt);
+        if (!visitedEnds.has(ek)) {
+          visitedEnds.add(ek);
+          for (let r = 0; r < roads.length; r++) {
+            const rd = roads[r];
+            if (rd === task.road) continue;
+            // Road starts near our endpoint → walk forward
+            if (ptDist(endPt, rd[0]) < 8) {
+              queue.push({
+                road: rd,
+                startIdx: 1,
+                direction: 1,
+                entryPt: rd[0],
+                baseDist: dist,
+              });
+            }
+            // Road ends near our endpoint → walk backward
+            if (ptDist(endPt, rd[rd.length - 1]) < 8) {
+              queue.push({
+                road: rd,
+                startIdx: rd.length - 2,
+                direction: -1,
+                entryPt: rd[rd.length - 1],
+                baseDist: dist,
+              });
+            }
+          }
+        }
+      }
+    }
   }
 
   return features;

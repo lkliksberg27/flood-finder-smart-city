@@ -8,11 +8,12 @@ import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roa
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-const STATUS_COLORS: Record<string, string> = {
-  online: "#059669",
-  alert: "#dc2626",
-  offline: "#4b5563",
-};
+function sensorColor(status: string, floodDepth: number): string {
+  if (status === "offline") return "#4b5563";
+  if (floodDepth > 10) return "#dc2626";
+  if (floodDepth > 0) return "#f59e0b";
+  return "#059669";
+}
 
 interface Props {
   devices: Device[];
@@ -71,22 +72,36 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
         data: { type: "FeatureCollection", features: [] },
       });
 
-      // Flood water on streets
+      // Flood water glow (soft outer halo for smooth gradient)
+      map.addLayer({
+        id: "flood-road-glow",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
+            0.1, "#1a4a7a", 0.5, "#2874a6", 1, "#3498db"],
+          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
+            0.08, 10, 0.3, 16, 0.6, 22, 1, 30],
+          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
+            0.08, 0.04, 0.2, 0.08, 0.5, 0.12, 1, 0.18],
+          "line-blur": 8,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      // Flood water main line (smooth gradient)
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1e5a8a", 0.4, "#2874a6", 0.7, "#3498b8", 1, "#4aa3c2"],
-          "line-width": ["interpolate", ["linear"], ["zoom"],
-            12, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 1, 0.5, 2, 1, 4],
-            14, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 2, 0.5, 4, 1, 7],
-            16, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 3, 0.5, 6, 1, 10],
-            18, ["interpolate", ["linear"], ["get", "intensity"], 0.1, 4, 0.5, 8, 1, 14]],
+            0.08, "#1a5276", 0.25, "#2180a8", 0.5, "#3498db", 0.75, "#5dade2", 1, "#85c1e9"],
+          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
+            0.08, 2, 0.25, 3.5, 0.5, 5, 0.75, 7, 1, 10],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.08, 0.35, 0.3, 0.5, 0.6, 0.6, 1, 0.7],
-          "line-blur": 1,
+            0.08, 0.25, 0.25, 0.4, 0.5, 0.55, 0.75, 0.65, 1, 0.8],
+          "line-blur": 1.5,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -235,7 +250,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       const stats = deviceStats[d.device_id] ?? { count: 0, totalDepth: 0, maxDepth: 0, compound: 0 };
       const avgDepth = stats.count > 0 ? Math.round(stats.totalDepth / stats.count) : 0;
 
-      const color = STATUS_COLORS[d.status] ?? "#6b7280";
+      const color = sensorColor(d.status, stats.maxDepth);
 
       dotFeatures.push({
         type: "Feature",
@@ -328,19 +343,24 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#059669", display: "inline-block" }} />
-          <span>Online</span>
+          <span>No Flooding</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#f59e0b", display: "inline-block" }} />
+          <span>Moderate Flood</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626", display: "inline-block" }} />
-          <span>Flood Alert</span>
+          <span>Severe Flood</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4b5563", display: "inline-block" }} />
           <span>Offline</span>
         </div>
+        <hr style={{ border: "none", borderTop: "1px solid #374151", margin: "4px 0" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 10, height: 3, borderRadius: 2, background: "rgba(52,152,184,0.5)", display: "inline-block" }} />
-          <span>Flooded Streets</span>
+          <span style={{ width: 14, height: 3, borderRadius: 2, background: "linear-gradient(to right, #1a5276, #85c1e9)", display: "inline-block" }} />
+          <span>Flood Water</span>
         </div>
       </div>
 
