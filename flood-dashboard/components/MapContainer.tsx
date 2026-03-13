@@ -150,12 +150,31 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       // Prevent double-init
       if (map.getSource("device-dots")) return;
 
-      // Force tile rendering — nudge the map to trigger first paint
-      requestAnimationFrame(() => {
+      // Force tile loading: Mapbox GL in Next.js dynamic imports stalls on
+      // initial render. We aggressively kick the render loop + dispatch
+      // synthetic mouse events on the canvas to wake up the tile pipeline.
+      const kickTiles = () => {
         map.resize();
         map.panBy([1, 0], { duration: 0 });
         map.panBy([-1, 0], { duration: 0 });
-      });
+        // Synthetic mousemove on canvas wakes Mapbox's internal render loop
+        const canvas = map.getCanvas();
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const cx = rect.width / 2, cy = rect.height / 2;
+          canvas.dispatchEvent(new MouseEvent("mousemove", {
+            clientX: rect.left + cx, clientY: rect.top + cy, bubbles: true,
+          }));
+        }
+      };
+      requestAnimationFrame(kickTiles);
+      // Repeat kicks for 15s to handle slow tile loading
+      let kickCount = 0;
+      const kickInterval = setInterval(() => {
+        kickCount++;
+        try { kickTiles(); map.triggerRepaint(); } catch {}
+        if (kickCount > 30) clearInterval(kickInterval);
+      }, 500);
       map.addSource("device-alerts", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -323,38 +342,26 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     map.on("load", initSources);
 
-    // Flood visualization: query Mapbox vector tiles for road geometry on idle
+    // Flood visualization: query Mapbox vector tiles for road geometry
     // This works for ANY location worldwide — no static data files needed
     const refreshFloodFromTiles = () => {
       try {
         const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
-        if (!roadSrc) { console.log("[FloodViz] no flood-roads source"); return; }
+        if (!roadSrc) return;
         const currentDevices = devicesRef.current;
         const currentDepths = floodDepthsRef.current;
-        if (currentDevices.length === 0) { console.log("[FloodViz] no devices"); return; }
-
-        const floodingCount = currentDevices.filter(d => (currentDepths[d.device_id] ?? 0) > 0).length;
-        console.log("[FloodViz] idle fired — devices:", currentDevices.length, "flooding:", floodingCount);
-
-        // Debug: check what road layers exist
-        const style = map.getStyle();
-        const roadLayers = style?.layers?.filter(
-          (l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road"
-        ) ?? [];
-        console.log("[FloodViz] road layers found:", roadLayers.length, roadLayers.map(l => l.id));
+        if (currentDevices.length === 0) return;
 
         // Query road geometry from Mapbox's vector tiles
         const roads = queryMapboxRoads(map, currentDevices);
-        console.log("[FloodViz] queryMapboxRoads returned:", roads.length, "roads");
         if (roads.length > 0) {
           cachedRoadsRef.current = roads;
         }
-        if (cachedRoadsRef.current.length === 0) { console.log("[FloodViz] no roads found, waiting..."); return; }
+        if (cachedRoadsRef.current.length === 0) return;
 
         const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths);
-        console.log("[FloodViz] flood features:", features.length);
         roadSrc.setData({ type: "FeatureCollection", features });
-      } catch (err) { console.error("[FloodViz] error:", err); }
+      } catch { /* tiles not ready */ }
     };
 
     // idle fires when map finishes rendering all tiles — perfect time to query features
