@@ -239,8 +239,9 @@ export function calculateFloodFeatures(
     // The snap point is the center of the flood spread
     const snapPt = snapToRoad(sensorPt, roads[snapRi]);
 
-    // Coverage radius: based on flood depth
-    const maxDist = Math.min(60, 20 + sensor.depth * 1.5);
+    // Coverage radius: small floods stay tight, only severe ones spread far
+    // depth  1cm → 10m,  5cm → 14m,  10cm → 20m,  20cm → 35m,  40cm → 55m
+    const maxDist = Math.min(55, 8 + sensor.depth * 1.2);
 
     // BFS: find all roads reachable from snap road through connected streets
     const reachable = new Set<number>();
