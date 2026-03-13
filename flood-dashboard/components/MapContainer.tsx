@@ -347,9 +347,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     });
 
     // --- Render-loop stall fix for Next.js dynamic imports ---
-    // Mapbox render loop stalls: style.load fires but tiles never fetch.
-    // _render() alone doesn't trigger tile loading — we need the full _update() cycle
-    // plus requestAnimationFrame scheduling that Mapbox normally runs internally.
+    // Mapbox render loop stalls: style.load fires but tiles never fetch/render.
+    // Neither _render() nor _update() unsticks it. Only real user interaction works.
+    // Fix: simulate mouse events on the canvas to wake up Mapbox's event-driven loop.
 
     let renderKickTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -383,63 +383,76 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       }
     });
 
-    // After style loads, kick the full render+update cycle
+    // Simulate a mouse interaction on the canvas to wake up Mapbox's render loop
+    const simulateInteraction = () => {
+      try {
+        const canvas = map.getCanvas();
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const cx = rect.width / 2;
+        const cy = rect.height / 2;
+        const opts: MouseEventInit = { bubbles: true, clientX: rect.left + cx, clientY: rect.top + cy };
+        canvas.dispatchEvent(new MouseEvent("mousemove", opts));
+        canvas.dispatchEvent(new MouseEvent("mousedown", { ...opts, button: 0 }));
+        canvas.dispatchEvent(new MouseEvent("mousemove", { ...opts, clientX: rect.left + cx + 1, clientY: rect.top + cy + 1 }));
+        canvas.dispatchEvent(new MouseEvent("mouseup", { ...opts, button: 0 }));
+        // Also try wheel event
+        canvas.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -1, clientX: rect.left + cx, clientY: rect.top + cy }));
+        setTimeout(() => {
+          canvas.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 1, clientX: rect.left + cx, clientY: rect.top + cy }));
+        }, 100);
+        console.log("[FloodViz] simulated interaction on canvas");
+      } catch (e) {
+        console.log("[FloodViz] simulateInteraction error:", e);
+      }
+    };
+
+    // After style loads, start simulation attempts
     map.once("style.load", () => {
       console.log("[FloodViz] style.load fired");
       if (!map.getSource("device-dots")) initSources();
 
-      // Full update cycle: _update() handles tile loading, _render() paints
-      let ticks = 0;
+      // Simulate interaction immediately and again at intervals
+      simulateInteraction();
+      let attempts = 0;
       renderKickTimer = setInterval(() => {
-        ticks++;
-        try {
+        attempts++;
+        // Keep simulating until style is loaded or we give up
+        if (!map.isStyleLoaded() && attempts <= 30) {
+          simulateInteraction();
           map.triggerRepaint();
-          // Call the full update pipeline, not just render
-          const m = map as unknown as Record<string, unknown>;
-          if (typeof m._update === "function") (m._update as () => void)();
-          if (typeof m._render === "function") (m._render as () => void)();
-          // Also schedule a real animation frame to keep the loop alive
-          if (ticks % 5 === 0) {
-            requestAnimationFrame(() => {
-              try { map.triggerRepaint(); } catch {}
-            });
-          }
-        } catch {}
-        if (ticks > 300) {
+        }
+        if (attempts > 60) {
           if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
         }
-      }, 100);
+      }, 500);
 
-      // Zoom bounce after a short delay to force tile requests
+      // Also try resize + zoom
       setTimeout(() => {
         try {
           map.resize();
-          const z = map.getZoom();
-          map.setZoom(z + 0.01);
-          setTimeout(() => { try { map.setZoom(z); } catch {} }, 100);
+          simulateInteraction();
         } catch {}
-      }, 500);
+      }, 1000);
     });
 
-    // Last resort: if style.load never fires within 5s, force everything
+    // Last resort at 5s
     const lastResortTimer = setTimeout(() => {
       if (!map.getSource("device-dots")) {
         try { initSources(); } catch {}
       }
+      simulateInteraction();
+      // Keep trying every second for 30s
       if (!renderKickTimer) {
         let ticks = 0;
         renderKickTimer = setInterval(() => {
           ticks++;
-          try {
-            map.triggerRepaint();
-            const m = map as unknown as Record<string, unknown>;
-            if (typeof m._update === "function") (m._update as () => void)();
-            if (typeof m._render === "function") (m._render as () => void)();
-          } catch {}
-          if (ticks > 100) {
+          simulateInteraction();
+          try { map.triggerRepaint(); } catch {}
+          if (ticks > 30) {
             if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
           }
-        }, 100);
+        }, 1000);
       }
     }, 5000);
 
