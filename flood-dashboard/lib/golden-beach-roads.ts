@@ -165,14 +165,21 @@ export function calculateFloodFeatures(
       for (let i = 0; i < road.length - 1; i++) {
         const a = road[i];
         const b = road[i + 1];
+
+        // Use closest distance to sensor: min of vertex A, vertex B, midpoint
+        const dA = ptDist(sensorPt, a);
+        const dB = ptDist(sensorPt, b);
         const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        const distToSensor = ptDist(sensorPt, mid);
+        const dMid = ptDist(sensorPt, mid);
+        const distToSensor = Math.min(dA, dB, dMid);
 
         if (distToSensor > maxDist) continue;
 
-        // Check elevation at midpoint — skip if ground is above water
-        const H_ground = estimateElevation(mid[0], mid[1], elevSensors);
-        if (H_ground > H_water) continue;
+        // Skip segments very far above water (but allow close ones through)
+        if (distToSensor > 15) {
+          const H_ground = estimateElevation(mid[0], mid[1], elevSensors);
+          if (H_ground > H_water) continue;
+        }
 
         // Gradient: 1.0 at sensor → 0.15 at max distance
         const distFade = 1 - (distToSensor / Math.max(maxDist, 1)) * 0.85;
