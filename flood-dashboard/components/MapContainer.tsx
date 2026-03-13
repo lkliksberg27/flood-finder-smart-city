@@ -65,8 +65,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
   const cachedRoadsRef = useRef<number[][][]>([]);
   const devicesRef = useRef<Device[]>(devices);
   const onDeviceClickRef = useRef(onDeviceClick);
+  const floodDepthsRef = useRef<Record<string, number>>({});
   devicesRef.current = devices;
   onDeviceClickRef.current = onDeviceClick;
+  floodDepthsRef.current = floodDepths ?? {};
 
   const loadPopupData = useCallback(async (deviceId: string) => {
     try {
@@ -165,6 +167,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       map.addSource("flood-roads", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
+        tolerance: 0,
       });
 
       // Subtle glow underneath flood water
@@ -320,6 +323,22 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     map.on("load", initSources);
 
+    // Re-render flood viz on zoom/pan to prevent lines disappearing
+    let floodRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    map.on('moveend', () => {
+      if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
+      floodRefreshTimer = setTimeout(() => {
+        const roads = cachedRoadsRef.current;
+        if (roads.length === 0) return;
+        try {
+          const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
+          if (!roadSrc) return;
+          const features = calculateFloodFeatures(roads, devicesRef.current, floodDepthsRef.current);
+          roadSrc.setData({ type: "FeatureCollection", features });
+        } catch {}
+      }, 150);
+    });
+
     // --- Render-loop stall fix for Next.js dynamic imports ---
     // Mapbox render loop stalls with _styleDirty=true but no rAF scheduled.
     // The manual console fix (triggerRepaint + _render at 100ms) works AFTER
@@ -397,6 +416,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       clearInterval(earlyInitTimer);
       if (renderKickTimer) clearInterval(renderKickTimer);
       clearTimeout(lastResortTimer);
+      if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
