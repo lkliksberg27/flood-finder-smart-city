@@ -491,7 +491,6 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     return () => {
       cancelled = true;
-      clearInterval(floodRetry);
     };
   }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
