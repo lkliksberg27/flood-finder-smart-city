@@ -328,21 +328,33 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const refreshFloodFromTiles = () => {
       try {
         const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
-        if (!roadSrc) return;
+        if (!roadSrc) { console.log("[FloodViz] no flood-roads source"); return; }
         const currentDevices = devicesRef.current;
         const currentDepths = floodDepthsRef.current;
-        if (currentDevices.length === 0) return;
+        if (currentDevices.length === 0) { console.log("[FloodViz] no devices"); return; }
+
+        const floodingCount = currentDevices.filter(d => (currentDepths[d.device_id] ?? 0) > 0).length;
+        console.log("[FloodViz] idle fired — devices:", currentDevices.length, "flooding:", floodingCount);
+
+        // Debug: check what road layers exist
+        const style = map.getStyle();
+        const roadLayers = style?.layers?.filter(
+          (l) => l.type === "line" && (l as Record<string, unknown>)["source-layer"] === "road"
+        ) ?? [];
+        console.log("[FloodViz] road layers found:", roadLayers.length, roadLayers.map(l => l.id));
 
         // Query road geometry from Mapbox's vector tiles
         const roads = queryMapboxRoads(map, currentDevices);
+        console.log("[FloodViz] queryMapboxRoads returned:", roads.length, "roads");
         if (roads.length > 0) {
           cachedRoadsRef.current = roads;
         }
-        if (cachedRoadsRef.current.length === 0) return;
+        if (cachedRoadsRef.current.length === 0) { console.log("[FloodViz] no roads found, waiting..."); return; }
 
         const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths);
+        console.log("[FloodViz] flood features:", features.length);
         roadSrc.setData({ type: "FeatureCollection", features });
-      } catch {}
+      } catch (err) { console.error("[FloodViz] error:", err); }
     };
 
     // idle fires when map finishes rendering all tiles — perfect time to query features
