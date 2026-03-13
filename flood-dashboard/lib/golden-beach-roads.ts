@@ -190,8 +190,8 @@ export function calculateFloodFeatures(
       }
     }
 
-    // Sensor is on sidewalk edge, road geometry is centerline — allow up to 12m
-    if (bestRoadIdx === -1 || bestDist > 12) continue;
+    // Sensor is on sidewalk edge, road geometry is centerline
+    if (bestRoadIdx === -1 || bestDist > 25) continue;
 
     // 2. BFS flood-fill along road network from sensor position
     const ptKey = (p: number[]) =>
