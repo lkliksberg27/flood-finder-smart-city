@@ -135,7 +135,7 @@ export function queryMapboxRoads(
 
   for (const device of devices) {
     const point = map.project([device.lng, device.lat]);
-    const size = 80;
+    const size = 200;
     const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
       [point.x - size, point.y - size],
       [point.x + size, point.y + size],
@@ -190,8 +190,8 @@ export function calculateFloodFeatures(
     }));
   if (flooding.length === 0 || roads.length === 0) return [];
 
-  // Build road connectivity graph: roads sharing an endpoint within 2m
-  // (real Mapbox intersections share exact vertices; 2m catches tile-edge splits
+  // Build road connectivity graph: roads sharing an endpoint within 3m
+  // (real Mapbox intersections share exact vertices; 3m catches tile-edge splits
   //  without falsely connecting parallel streets)
   const adj: number[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {
@@ -201,8 +201,8 @@ export function calculateFloodFeatures(
       const jStart = roads[j][0];
       const jEnd = roads[j][roads[j].length - 1];
       if (
-        ptDist(iStart, jStart) < 2 || ptDist(iStart, jEnd) < 2 ||
-        ptDist(iEnd, jStart) < 2 || ptDist(iEnd, jEnd) < 2
+        ptDist(iStart, jStart) < 3 || ptDist(iStart, jEnd) < 3 ||
+        ptDist(iEnd, jStart) < 3 || ptDist(iEnd, jEnd) < 3
       ) {
         adj[i].push(j);
         adj[j].push(i);
