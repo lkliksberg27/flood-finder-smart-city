@@ -323,21 +323,36 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     map.on("load", initSources);
 
-    // Re-render flood viz on zoom/pan to prevent lines disappearing
-    // Also queries roads if cache is empty (tiles may have loaded after initial attempt)
+    // Flood visualization: query Mapbox vector tiles for road geometry on idle
+    // This works for ANY location worldwide — no static data files needed
+    const refreshFloodFromTiles = () => {
+      try {
+        const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
+        if (!roadSrc) return;
+        const currentDevices = devicesRef.current;
+        const currentDepths = floodDepthsRef.current;
+        if (currentDevices.length === 0) return;
+
+        // Query road geometry from Mapbox's vector tiles
+        const roads = queryMapboxRoads(map, currentDevices);
+        if (roads.length > 0) {
+          cachedRoadsRef.current = roads;
+        }
+        if (cachedRoadsRef.current.length === 0) return;
+
+        const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths);
+        roadSrc.setData({ type: "FeatureCollection", features });
+      } catch {}
+    };
+
+    // idle fires when map finishes rendering all tiles — perfect time to query features
+    map.on("idle", refreshFloodFromTiles);
+
+    // Also refresh on moveend for responsiveness during pan/zoom
     let floodRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     map.on('moveend', () => {
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
-      floodRefreshTimer = setTimeout(() => {
-        try {
-          const roads = cachedRoadsRef.current;
-          if (roads.length === 0) return;
-          const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
-          if (!roadSrc) return;
-          const features = calculateFloodFeatures(roads, devicesRef.current, floodDepthsRef.current);
-          roadSrc.setData({ type: "FeatureCollection", features });
-        } catch {}
-      }, 150);
+      floodRefreshTimer = setTimeout(refreshFloodFromTiles, 200);
     });
 
     // --- Render-loop kick for Next.js dynamic imports ---
@@ -377,6 +392,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       clearInterval(earlyInitTimer);
       clearTimeout(lastResortTimer);
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
+      map.off("idle", refreshFloodFromTiles);
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
@@ -448,50 +464,18 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
     }
 
-    // Query road geometry and calculate flood water
-    let cancelled = false;
-
-    const updateFlood = () => {
-      if (cancelled) return;
-      try {
-        const roads = cachedRoadsRef.current;
-        if (roads.length === 0) return;
+    // Flood water: use cached roads from idle event, or query now if available
+    if (roadSrc) {
+      const roads = cachedRoadsRef.current.length > 0
+        ? cachedRoadsRef.current
+        : queryMapboxRoads(map, devices);
+      if (roads.length > 0) {
+        cachedRoadsRef.current = roads;
         const features = calculateFloodFeatures(roads, devices, depths);
-        if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
-      } catch (err) {
-        console.error("[FloodViz] updateFlood error:", err);
+        roadSrc.setData({ type: "FeatureCollection", features });
       }
-    };
-
-    // Load static road geometry (instant) then calculate flood features
-    if (cachedRoadsRef.current.length === 0) {
-      fetch("/golden-beach-roads.geojson")
-        .then((r) => r.json())
-        .then((geojson: { features: Array<{ geometry: { coordinates: number[][] } }> }) => {
-          if (cancelled) return;
-          const roads = geojson.features.map((f) => f.geometry.coordinates).filter((c) => c.length >= 2);
-          if (roads.length > 0) cachedRoadsRef.current = roads;
-          updateFlood();
-        })
-        .catch(() => {
-          // Fallback: query Mapbox tiles (slower, waits for tile load)
-          const floodRetry = setInterval(() => {
-            if (cancelled) { clearInterval(floodRetry); return; }
-            const roads = queryMapboxRoads(map, devices);
-            if (roads.length > 0) {
-              cachedRoadsRef.current = roads;
-              clearInterval(floodRetry);
-              updateFlood();
-            }
-          }, 2000);
-        });
-    } else {
-      updateFlood();
+      // If no roads yet, the idle event will pick them up once tiles load
     }
-
-    return () => {
-      cancelled = true;
-    };
   }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
   // Search location marker
