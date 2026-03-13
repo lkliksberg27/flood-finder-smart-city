@@ -113,46 +113,37 @@ function dedupKey(coords: number[][]): string {
   return `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
 }
 
-/** Query real road geometry from Mapbox vector tiles. */
+/**
+ * Query road geometry from Mapbox vector tiles.
+ *
+ * Uses TWO strategies for robustness:
+ * 1. querySourceFeatures — queries the tile cache directly (works even when
+ *    tiles are loaded but not yet rendered, common in Next.js)
+ * 2. queryRenderedFeatures — queries painted features (more precise bbox)
+ *
+ * The source query is the primary method; rendered query is fallback/supplement.
+ */
 export function queryMapboxRoads(
   map: mapboxgl.Map,
   devices: Device[],
 ): number[][][] {
-  const style = map.getStyle();
-  if (!style?.layers) return [];
-
-  const roadLayerIds = style.layers
-    .filter(
-      (l) =>
-        l.type === "line" &&
-        (l as Record<string, unknown>)["source-layer"] === "road",
-    )
-    .map((l) => l.id);
-  if (roadLayerIds.length === 0) return [];
-
   const allCoords: number[][][] = [];
   const seen = new Set<string>();
 
-  // Debug: try querying ALL features in the viewport first
-  try {
-    const canvas = map.getCanvas();
-    const vp: [mapboxgl.PointLike, mapboxgl.PointLike] = [[0, 0], [canvas.width, canvas.height]];
-    const allFeats = map.queryRenderedFeatures(vp, { layers: roadLayerIds });
-    console.log("[queryMapboxRoads] total road features in viewport:", allFeats.length, "canvas:", canvas.width, "x", canvas.height);
-  } catch (e) { console.log("[queryMapboxRoads] viewport query failed:", e); }
+  // Determine which Mapbox source contains road data
+  const style = map.getStyle();
+  if (!style?.sources) return [];
 
-  for (const device of devices) {
-    const point = map.project([device.lng, device.lat]);
-    const size = 200;
-    const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
-      [point.x - size, point.y - size],
-      [point.x + size, point.y + size],
-    ];
+  // Find the source that has road data (usually "composite" in Mapbox styles)
+  const sourceIds = Object.keys(style.sources).filter((id) => {
+    const src = style.sources![id];
+    return src.type === "vector";
+  });
+
+  // Strategy 1: querySourceFeatures — works with tile cache, even before render
+  for (const sourceId of sourceIds) {
     try {
-      const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
-      if (features.length === 0) {
-        console.log("[queryMapboxRoads] device", device.device_id, "at pixel", Math.round(point.x), Math.round(point.y), "→ 0 features (bbox size:", size, ")");
-      }
+      const features = map.querySourceFeatures(sourceId, { sourceLayer: "road" });
       for (const f of features) {
         if (f.geometry.type === "LineString") {
           const coords = (f.geometry as GeoJSON.LineString).coordinates as number[][];
@@ -172,10 +163,54 @@ export function queryMapboxRoads(
         }
       }
     } catch {
-      /* tiles not loaded yet */
+      /* source not ready */
     }
   }
 
+  // Strategy 2: if source query found nothing, try rendered features
+  if (allCoords.length === 0) {
+    const roadLayerIds = (style.layers ?? [])
+      .filter(
+        (l) =>
+          l.type === "line" &&
+          (l as Record<string, unknown>)["source-layer"] === "road",
+      )
+      .map((l) => l.id);
+
+    for (const device of devices) {
+      const point = map.project([device.lng, device.lat]);
+      const size = 200;
+      const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
+        [point.x - size, point.y - size],
+        [point.x + size, point.y + size],
+      ];
+      try {
+        const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
+        for (const f of features) {
+          if (f.geometry.type === "LineString") {
+            const coords = (f.geometry as GeoJSON.LineString).coordinates as number[][];
+            if (!coords || coords.length < 2) continue;
+            const key = dedupKey(coords);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            allCoords.push(coords);
+          } else if (f.geometry.type === "MultiLineString") {
+            for (const coords of (f.geometry as GeoJSON.MultiLineString).coordinates as number[][][]) {
+              if (!coords || coords.length < 2) continue;
+              const key = dedupKey(coords);
+              if (seen.has(key)) continue;
+              seen.add(key);
+              allCoords.push(coords);
+            }
+          }
+        }
+      } catch {
+        /* tiles not loaded yet */
+      }
+    }
+  }
+
+  console.log("[queryMapboxRoads] found", allCoords.length, "road segments");
   return allCoords;
 }
 
