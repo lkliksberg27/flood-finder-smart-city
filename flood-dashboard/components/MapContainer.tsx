@@ -393,11 +393,15 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     const updateFlood = () => {
       if (cancelled) return;
-      const roads = queryMapboxRoads(map, devices);
-      const features = calculateFloodFeatures(roads, devices, depths);
-      console.log("[FLOOD DEBUG]", { roads: roads.length, depths: Object.keys(depths).length, depthValues: depths, features: features.length, deviceCount: devices.length });
-      if (roads.length === 0) return;
-      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+      try {
+        const roads = queryMapboxRoads(map, devices);
+        const features = calculateFloodFeatures(roads, devices, depths);
+        console.log("[FLOOD]", "roads:", roads.length, "depths:", JSON.stringify(depths), "features:", features.length);
+        if (roads.length === 0) return;
+        if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+      } catch (err) {
+        console.error("[FLOOD ERROR]", err);
+      }
     };
 
     // Run immediately with fallback roads, then re-run when tiles load
