@@ -347,9 +347,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     });
 
     // --- Render-loop stall fix for Next.js dynamic imports ---
-    // Mapbox render loop stalls with _styleDirty=true but no rAF scheduled.
-    // The manual console fix (triggerRepaint + _render at 100ms) works AFTER
-    // style.load has fired. So we wait for that event before kicking.
+    // Mapbox render loop stalls: style.load fires but tiles never fetch.
+    // _render() alone doesn't trigger tile loading — we need the full _update() cycle
+    // plus requestAnimationFrame scheduling that Mapbox normally runs internally.
 
     let renderKickTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -365,33 +365,60 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       } catch {}
     }, 200);
 
-    // After style loads, kick the render loop (matches manual console fix timing)
+    // When map reaches idle state (all tiles loaded), query roads for flood viz
+    map.on("idle", () => {
+      if (cachedRoadsRef.current.length > 0) return;
+      const roads = queryMapboxRoads(map, devicesRef.current);
+      console.log(`[FloodViz] idle: queried ${roads.length} roads`);
+      if (roads.length > 0) {
+        cachedRoadsRef.current = roads;
+        try {
+          const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
+          if (roadSrc) {
+            const features = calculateFloodFeatures(roads, devicesRef.current, floodDepthsRef.current);
+            console.log(`[FloodViz] idle: ${features.length} flood features`);
+            roadSrc.setData({ type: "FeatureCollection", features });
+          }
+        } catch {}
+      }
+    });
+
+    // After style loads, kick the full render+update cycle
     map.once("style.load", () => {
       console.log("[FloodViz] style.load fired");
-      // Init sources immediately if not done
       if (!map.getSource("device-dots")) initSources();
 
-      // Aggressive zoom bounce forces tile requests for this viewport
-      try {
-        map.resize();
-        const z = map.getZoom();
-        map.setZoom(z + 0.5);
-        setTimeout(() => { try { map.setZoom(z); } catch {} }, 150);
-      } catch {}
-
-      // Kick render loop at 100ms — same as the manual fix that works
+      // Full update cycle: _update() handles tile loading, _render() paints
       let ticks = 0;
       renderKickTimer = setInterval(() => {
         ticks++;
         try {
           map.triggerRepaint();
-          (map as unknown as { _render: () => void })._render();
+          // Call the full update pipeline, not just render
+          const m = map as unknown as Record<string, unknown>;
+          if (typeof m._update === "function") (m._update as () => void)();
+          if (typeof m._render === "function") (m._render as () => void)();
+          // Also schedule a real animation frame to keep the loop alive
+          if (ticks % 5 === 0) {
+            requestAnimationFrame(() => {
+              try { map.triggerRepaint(); } catch {}
+            });
+          }
         } catch {}
-        // Run for 30 seconds (300 ticks) instead of 10
         if (ticks > 300) {
           if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
         }
       }, 100);
+
+      // Zoom bounce after a short delay to force tile requests
+      setTimeout(() => {
+        try {
+          map.resize();
+          const z = map.getZoom();
+          map.setZoom(z + 0.01);
+          setTimeout(() => { try { map.setZoom(z); } catch {} }, 100);
+        } catch {}
+      }, 500);
     });
 
     // Last resort: if style.load never fires within 5s, force everything
@@ -405,20 +432,15 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           ticks++;
           try {
             map.triggerRepaint();
-            (map as unknown as { _render: () => void })._render();
+            const m = map as unknown as Record<string, unknown>;
+            if (typeof m._update === "function") (m._update as () => void)();
+            if (typeof m._render === "function") (m._render as () => void)();
           } catch {}
           if (ticks > 100) {
             if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
           }
         }, 100);
       }
-      // Hard zoom bounce
-      try {
-        const c = map.getCenter();
-        const z = map.getZoom();
-        map.jumpTo({ center: [c.lng, c.lat + 0.001], zoom: z });
-        setTimeout(() => { try { map.jumpTo({ center: c, zoom: z }); } catch {} }, 200);
-      } catch {}
     }, 5000);
 
     return () => {
