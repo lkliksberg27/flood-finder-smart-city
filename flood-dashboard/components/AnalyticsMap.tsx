@@ -305,10 +305,14 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     const updateFlood = () => {
       if (cancelled) return;
-      const roads = queryMapboxRoads(map, devices);
-      if (roads.length === 0) return;
-      const features = calculateFloodFeatures(roads, devices, depthMap);
-      if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+      try {
+        const roads = queryMapboxRoads(map, devices);
+        if (roads.length === 0) return;
+        const features = calculateFloodFeatures(roads, devices, depthMap);
+        if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
+      } catch (err) {
+        console.error("[FloodViz] updateFlood error:", err);
+      }
     };
 
     // Run immediately with fallback roads, then re-run when tiles load
