@@ -2,9 +2,9 @@
  * Flood visualization using actual Mapbox road geometry ONLY.
  *
  * For each flooding sensor:
- * 1. Find the exact closest point on any road (snap point)
- * 2. Color nearby road polylines within a tight radius
- * 3. Full road polylines — no choppy 2-point segments
+ * 1. Find exact closest point on any road (snap point, must be <30m)
+ * 2. Clip each road segment to only the portion within the flood radius
+ * 3. Tight spread: 20m base + 1.5m/cm depth, max 60m
  */
 import type { Device } from "./types";
 import type mapboxgl from "mapbox-gl";
@@ -13,18 +13,7 @@ function cosLat(lat: number): number {
   return Math.cos((lat * Math.PI) / 180);
 }
 
-/** Distance between two [lng,lat] points in meters. */
-function ptDist(a: number[], b: number[]): number {
-  const lat = (a[1] + b[1]) / 2;
-  const dx = (a[0] - b[0]) * 111320 * cosLat(lat);
-  const dy = (a[1] - b[1]) * 111320;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-/**
- * Perpendicular distance from point p to segment [a, b] in meters.
- * Uses proper projection onto the segment (not just endpoint/midpoint).
- */
+/** Distance from point p to the closest point on segment [a, b] in meters. */
 function ptSegDist(p: number[], a: number[], b: number[]): number {
   const lat = (p[1] + a[1] + b[1]) / 3;
   const cL = cosLat(lat);
@@ -40,14 +29,53 @@ function ptSegDist(p: number[], a: number[], b: number[]): number {
   return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
 }
 
-/** Minimum distance from point p to any part of a road polyline. */
-function ptRoadDist(p: number[], road: number[][]): number {
-  let min = Infinity;
-  for (let i = 0; i < road.length - 1; i++) {
-    const d = ptSegDist(p, road[i], road[i + 1]);
-    if (d < min) min = d;
+/**
+ * Clip segment [a,b] to the portion within `radius` meters of `center`.
+ * Returns [clippedA, clippedB] or null if fully outside.
+ */
+function clipSegment(
+  center: number[], a: number[], b: number[], radius: number,
+): [number[], number[]] | null {
+  const lat = (center[1] + a[1] + b[1]) / 3;
+  const cL = cosLat(lat);
+  const S = 111320;
+
+  const cx = center[0] * S * cL, cy = center[1] * S;
+  const ax = a[0] * S * cL, ay = a[1] * S;
+  const bx = b[0] * S * cL, by = b[1] * S;
+
+  const dx = bx - ax, dy = by - ay;
+  const fx = ax - cx, fy = ay - cy;
+
+  const A2 = dx * dx + dy * dy;
+  const B2 = 2 * (fx * dx + fy * dy);
+  const C2 = fx * fx + fy * fy - radius * radius;
+
+  if (A2 < 0.01) {
+    // Degenerate (zero-length) segment
+    return C2 <= 0 ? [a, b] : null;
   }
-  return min;
+
+  const disc = B2 * B2 - 4 * A2 * C2;
+
+  if (disc < 0) {
+    // No circle intersection — segment is entirely inside or outside
+    return C2 <= 0 ? [a, b] : null;
+  }
+
+  const sqrtDisc = Math.sqrt(disc);
+  const t1 = (-B2 - sqrtDisc) / (2 * A2);
+  const t2 = (-B2 + sqrtDisc) / (2 * A2);
+
+  const tMin = Math.max(0, t1);
+  const tMax = Math.min(1, t2);
+
+  if (tMin >= tMax) return null;
+
+  return [
+    [a[0] + tMin * (b[0] - a[0]), a[1] + tMin * (b[1] - a[1])],
+    [a[0] + tMax * (b[0] - a[0]), a[1] + tMax * (b[1] - a[1])],
+  ];
 }
 
 function dedupKey(coords: number[][]): string {
@@ -58,7 +86,6 @@ function dedupKey(coords: number[][]): string {
 
 /**
  * Query real road geometry from Mapbox vector tiles.
- * Returns full road polylines from tiles.
  */
 export function queryMapboxRoads(
   map: mapboxgl.Map,
@@ -121,12 +148,12 @@ export function queryMapboxRoads(
 }
 
 /**
- * Flood water on roads — tight radius, full road polylines.
+ * Flood water on roads — clips each road segment to the flood radius.
  *
  * For each flooding sensor:
- * 1. Find closest point on any road (must be within 30m)
- * 2. Include full road polylines within a tight radius scaled by depth
- * 3. Intensity fades with distance from sensor
+ * 1. Find closest road (must be within 30m)
+ * 2. Clip each road segment to the circle of radius maxDist
+ * 3. Only the clipped portion is colored
  */
 export function calculateFloodFeatures(
   roads: number[][][],
@@ -142,52 +169,58 @@ export function calculateFloodFeatures(
     }));
   if (flooding.length === 0 || roads.length === 0) return [];
 
-  // Track best intensity per road polyline (by index)
-  const bestPerRoad = new Map<number, { intensity: number; depth: number }>();
+  // Best intensity per road segment (road index | segment index)
+  const best = new Map<string, {
+    intensity: number;
+    depth: number;
+    coords: [number[], number[]];
+  }>();
 
   for (const sensor of flooding) {
     const sensorPt = [sensor.lng, sensor.lat];
 
-    // Find snap distance: closest point on ANY road to this sensor
+    // Find snap distance — sensor must be within 30m of a road
     let snapDist = Infinity;
     for (const road of roads) {
-      const d = ptRoadDist(sensorPt, road);
-      if (d < snapDist) snapDist = d;
+      for (let i = 0; i < road.length - 1; i++) {
+        const d = ptSegDist(sensorPt, road[i], road[i + 1]);
+        if (d < snapDist) snapDist = d;
+      }
     }
-
-    // Sensor must be within 30m of a road
     if (snapDist > 30) continue;
 
     // Tight spread: 20m base + 1.5m per cm depth, max 60m
     const maxDist = Math.min(60, 20 + sensor.depth * 1.5);
 
-    // Check each road polyline
     for (let ri = 0; ri < roads.length; ri++) {
       const road = roads[ri];
-      const dist = ptRoadDist(sensorPt, road);
+      for (let si = 0; si < road.length - 1; si++) {
+        // Clip this segment to the flood radius circle
+        const clipped = clipSegment(sensorPt, road[si], road[si + 1], maxDist);
+        if (!clipped) continue;
 
-      if (dist > maxDist) continue;
+        // Intensity based on closest point distance
+        const dist = ptSegDist(sensorPt, clipped[0], clipped[1]);
+        const intensity = Math.max(0.3, 1 - (dist / maxDist) * 0.7);
 
-      // Intensity: 1.0 at sensor → 0.3 at max distance
-      const intensity = Math.max(0.3, 1 - (dist / maxDist) * 0.7);
-
-      const existing = bestPerRoad.get(ri);
-      if (!existing || intensity > existing.intensity) {
-        bestPerRoad.set(ri, { intensity, depth: sensor.depth });
+        const key = `${ri}|${si}`;
+        const existing = best.get(key);
+        if (!existing || intensity > existing.intensity) {
+          best.set(key, { intensity, depth: sensor.depth, coords: clipped });
+        }
       }
     }
   }
 
-  // Convert to GeoJSON features using FULL road polylines
   const features: GeoJSON.Feature[] = [];
-  for (const [ri, props] of bestPerRoad) {
+  for (const [, entry] of best) {
     features.push({
       type: "Feature",
       geometry: {
         type: "LineString",
-        coordinates: roads[ri],
+        coordinates: entry.coords,
       },
-      properties: props,
+      properties: { intensity: entry.intensity, depth: entry.depth },
     });
   }
 
