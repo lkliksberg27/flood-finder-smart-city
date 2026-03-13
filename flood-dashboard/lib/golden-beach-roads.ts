@@ -215,6 +215,8 @@ export function calculateFloodFeatures(
     intensity: number;
     depth: number;
     coords: [number[], number[]];
+    snapPt: number[];
+    maxDist: number;
   }>();
 
   for (const sensor of flooding) {
@@ -277,19 +279,34 @@ export function calculateFloodFeatures(
         const key = `${ri}|${si}`;
         const existing = best.get(key);
         if (!existing || intensity > existing.intensity) {
-          best.set(key, { intensity, depth: sensor.depth, coords: clipped });
+          best.set(key, { intensity, depth: sensor.depth, coords: clipped, snapPt, maxDist });
         }
       }
     }
   }
 
+  // Subdivide each segment into ~5m pieces for smooth gradient
   const features: GeoJSON.Feature[] = [];
   for (const [, entry] of best) {
-    features.push({
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: entry.coords },
-      properties: { intensity: entry.intensity, depth: entry.depth },
-    });
+    const [a, b] = entry.coords;
+    const segLen = ptDist(a, b);
+    const numPieces = Math.max(1, Math.ceil(segLen / 5));
+
+    for (let p = 0; p < numPieces; p++) {
+      const t0 = p / numPieces;
+      const t1 = (p + 1) / numPieces;
+      const p0 = [a[0] + t0 * (b[0] - a[0]), a[1] + t0 * (b[1] - a[1])];
+      const p1 = [a[0] + t1 * (b[0] - a[0]), a[1] + t1 * (b[1] - a[1])];
+      const mid = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
+      const dist = ptDist(entry.snapPt, mid);
+      const intensity = Math.max(0.3, 1 - (dist / entry.maxDist) * 0.7);
+
+      features.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: [p0, p1] },
+        properties: { intensity, depth: entry.depth },
+      });
+    }
   }
 
   return features;
