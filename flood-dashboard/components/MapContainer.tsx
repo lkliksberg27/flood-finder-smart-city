@@ -324,13 +324,19 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     map.on("load", initSources);
 
     // Re-render flood viz on zoom/pan to prevent lines disappearing
+    // Also queries roads if cache is empty (tiles may have loaded after initial attempt)
     let floodRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     map.on('moveend', () => {
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       floodRefreshTimer = setTimeout(() => {
-        const roads = cachedRoadsRef.current;
-        if (roads.length === 0) return;
         try {
+          // If no roads cached yet, try querying now that tiles may have loaded
+          if (cachedRoadsRef.current.length === 0) {
+            const newRoads = queryMapboxRoads(map, devicesRef.current);
+            if (newRoads.length > 0) cachedRoadsRef.current = newRoads;
+          }
+          const roads = cachedRoadsRef.current;
+          if (roads.length === 0) return;
           const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
           if (!roadSrc) return;
           const features = calculateFloodFeatures(roads, devicesRef.current, floodDepthsRef.current);
@@ -500,11 +506,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           roads = queryMapboxRoads(map, devices);
           if (roads.length > 0) cachedRoadsRef.current = roads;
         }
-        const floodingDevices = devices.filter(d => (depths[d.device_id] ?? 0) > 0);
-        console.log("[FloodViz] roads=" + roads.length + " devices=" + devices.length + " flooding=" + floodingDevices.length + " depthKeys=" + Object.keys(depths).length);
-        if (roads.length === 0) { console.log("[FloodViz] NO ROADS - bailing"); return; }
+        if (roads.length === 0) return;
         const features = calculateFloodFeatures(roads, devices, depths);
-        console.log("[FloodViz] features=" + features.length + " roadSrc=" + !!roadSrc);
         if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) {
         console.error("[FloodViz] updateFlood error:", err);
