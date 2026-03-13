@@ -320,20 +320,30 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     map.on("load", initSources);
 
-    // Fallback: poll every 1s — resize + nudge until style loads, then force init
+    // Fallback: the Mapbox render loop can stall (frameId stuck at ~5,
+    // _styleDirty=true but no new requestAnimationFrame scheduled).
+    // Poll every 500ms: kick the render loop and init sources if needed.
     const fallbackTimer = setInterval(() => {
-      if (map.getSource("device-dots")) {
-        clearInterval(fallbackTimer);
-        return;
+      // Kick the render loop — triggerRepaint schedules a new rAF,
+      // _render() forces an immediate frame if the loop stalled.
+      map.triggerRepaint();
+      try { (map as unknown as { _render: () => void })._render(); } catch {}
+
+      // Init sources once style definition is loaded
+      if (!map.getSource("device-dots")) {
+        try {
+          const styleLoaded = (map as unknown as { style?: { _loaded?: boolean } }).style?._loaded;
+          if (styleLoaded || map.isStyleLoaded()) {
+            initSources();
+          }
+        } catch {}
       }
-      map.resize();
-      map.panBy([1, 0], { duration: 0 });
-      map.panBy([-1, 0], { duration: 0 });
-      if (map.isStyleLoaded()) {
+
+      // Stop once map is fully rendered with sources
+      if (map.getSource("device-dots") && map.isStyleLoaded()) {
         clearInterval(fallbackTimer);
-        initSources();
       }
-    }, 1000);
+    }, 500);
 
     return () => {
       clearInterval(fallbackTimer);
