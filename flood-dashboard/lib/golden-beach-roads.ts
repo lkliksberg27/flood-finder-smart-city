@@ -190,7 +190,9 @@ export function calculateFloodFeatures(
     }));
   if (flooding.length === 0 || roads.length === 0) return [];
 
-  // Build road connectivity graph: roads sharing an endpoint within 5m
+  // Build road connectivity graph: roads sharing an endpoint within 2m
+  // (real Mapbox intersections share exact vertices; 2m catches tile-edge splits
+  //  without falsely connecting parallel streets)
   const adj: number[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {
     const iStart = roads[i][0];
@@ -199,8 +201,8 @@ export function calculateFloodFeatures(
       const jStart = roads[j][0];
       const jEnd = roads[j][roads[j].length - 1];
       if (
-        ptDist(iStart, jStart) < 5 || ptDist(iStart, jEnd) < 5 ||
-        ptDist(iEnd, jStart) < 5 || ptDist(iEnd, jEnd) < 5
+        ptDist(iStart, jStart) < 2 || ptDist(iStart, jEnd) < 2 ||
+        ptDist(iEnd, jStart) < 2 || ptDist(iEnd, jEnd) < 2
       ) {
         adj[i].push(j);
         adj[j].push(i);
