@@ -174,26 +174,26 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "line-color": "#2980b9",
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 8, 1, 14],
+            0.1, 4, 0.3, 8, 0.6, 11, 1, 14],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 0.06, 1, 0.15],
+            0.1, 0.02, 0.3, 0.05, 0.6, 0.1, 1, 0.15],
           "line-blur": 6,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Crisp flood water — colors the road itself
+      // Crisp flood water — smooth gradient from dark→light blue
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, "#1a5276", 0.6, "#2e86c1", 1, "#5dade2"],
+            0.1, "#0e3854", 0.3, "#1a5276", 0.5, "#2471a3", 0.7, "#2e86c1", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 3, 0.6, 4.5, 1, 6],
+            0.1, 2, 0.3, 3, 0.6, 4.5, 1, 6],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 0.5, 0.6, 0.7, 1, 0.85],
+            0.1, 0.15, 0.3, 0.4, 0.5, 0.55, 0.7, 0.7, 1, 0.85],
           "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
