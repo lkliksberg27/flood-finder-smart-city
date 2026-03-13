@@ -116,31 +116,27 @@ function dedupKey(coords: number[][]): string {
 /**
  * Query road geometry from Mapbox vector tiles.
  *
- * Uses TWO strategies for robustness:
- * 1. querySourceFeatures — queries the tile cache directly (works even when
- *    tiles are loaded but not yet rendered, common in Next.js)
- * 2. queryRenderedFeatures — queries painted features (more precise bbox)
- *
- * The source query is the primary method; rendered query is fallback/supplement.
+ * Uses querySourceFeatures to read the tile cache directly (works even when
+ * tiles are loaded but not yet rendered — common in Next.js).
+ * Filters results to only roads within 100m of any device for performance.
  */
 export function queryMapboxRoads(
   map: mapboxgl.Map,
   devices: Device[],
 ): number[][][] {
-  const allCoords: number[][][] = [];
-  const seen = new Set<string>();
-
-  // Determine which Mapbox source contains road data
   const style = map.getStyle();
   if (!style?.sources) return [];
 
-  // Find the source that has road data (usually "composite" in Mapbox styles)
+  // Find vector sources (usually "composite" in Mapbox styles)
   const sourceIds = Object.keys(style.sources).filter((id) => {
     const src = style.sources![id];
     return src.type === "vector";
   });
 
-  // Strategy 1: querySourceFeatures — works with tile cache, even before render
+  // Collect all road features from the tile cache
+  const rawCoords: number[][][] = [];
+  const seen = new Set<string>();
+
   for (const sourceId of sourceIds) {
     try {
       const features = map.querySourceFeatures(sourceId, { sourceLayer: "road" });
@@ -151,14 +147,14 @@ export function queryMapboxRoads(
           const key = dedupKey(coords);
           if (seen.has(key)) continue;
           seen.add(key);
-          allCoords.push(coords);
+          rawCoords.push(coords);
         } else if (f.geometry.type === "MultiLineString") {
           for (const coords of (f.geometry as GeoJSON.MultiLineString).coordinates as number[][][]) {
             if (!coords || coords.length < 2) continue;
             const key = dedupKey(coords);
             if (seen.has(key)) continue;
             seen.add(key);
-            allCoords.push(coords);
+            rawCoords.push(coords);
           }
         }
       }
@@ -167,51 +163,21 @@ export function queryMapboxRoads(
     }
   }
 
-  // Strategy 2: if source query found nothing, try rendered features
-  if (allCoords.length === 0) {
-    const roadLayerIds = (style.layers ?? [])
-      .filter(
-        (l) =>
-          l.type === "line" &&
-          (l as Record<string, unknown>)["source-layer"] === "road",
-      )
-      .map((l) => l.id);
+  if (rawCoords.length === 0) return [];
 
-    for (const device of devices) {
-      const point = map.project([device.lng, device.lat]);
-      const size = 200;
-      const bbox: [mapboxgl.PointLike, mapboxgl.PointLike] = [
-        [point.x - size, point.y - size],
-        [point.x + size, point.y + size],
-      ];
-      try {
-        const features = map.queryRenderedFeatures(bbox, { layers: roadLayerIds });
-        for (const f of features) {
-          if (f.geometry.type === "LineString") {
-            const coords = (f.geometry as GeoJSON.LineString).coordinates as number[][];
-            if (!coords || coords.length < 2) continue;
-            const key = dedupKey(coords);
-            if (seen.has(key)) continue;
-            seen.add(key);
-            allCoords.push(coords);
-          } else if (f.geometry.type === "MultiLineString") {
-            for (const coords of (f.geometry as GeoJSON.MultiLineString).coordinates as number[][][]) {
-              if (!coords || coords.length < 2) continue;
-              const key = dedupKey(coords);
-              if (seen.has(key)) continue;
-              seen.add(key);
-              allCoords.push(coords);
-            }
-          }
-        }
-      } catch {
-        /* tiles not loaded yet */
+  // Filter: keep only roads within 100m of any device (avoids BFS on thousands of distant roads)
+  const MAX_DIST = 100; // meters
+  const nearby = rawCoords.filter((road) => {
+    for (const d of devices) {
+      const dp = [d.lng, d.lat];
+      for (let i = 0; i < road.length - 1; i++) {
+        if (ptSegDist(dp, road[i], road[i + 1]) <= MAX_DIST) return true;
       }
     }
-  }
+    return false;
+  });
 
-  console.log("[queryMapboxRoads] found", allCoords.length, "road segments");
-  return allCoords;
+  return nearby;
 }
 
 /**
