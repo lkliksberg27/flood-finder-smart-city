@@ -143,7 +143,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(containerRef.current);
 
-    map.on("load", () => {
+    const initSources = () => {
+      // Prevent double-init
+      if (map.getSource("device-dots")) return;
+
       // Force tile rendering — nudge the map to trigger first paint
       requestAnimationFrame(() => {
         map.resize();
@@ -313,9 +316,24 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       });
 
       setMapReady(true);
-    });
+    };
+
+    map.on("load", initSources);
+
+    // Fallback: if load event doesn't fire within 3s, force init
+    const fallbackTimer = setTimeout(() => {
+      if (!map.getSource("device-dots")) {
+        map.resize();
+        if (map.isStyleLoaded()) {
+          initSources();
+        } else {
+          map.once("style.load", initSources);
+        }
+      }
+    }, 3000);
 
     return () => {
+      clearTimeout(fallbackTimer);
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
