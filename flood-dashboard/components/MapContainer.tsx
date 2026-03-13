@@ -495,9 +495,14 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     }, 2000);
     updateFlood();
 
+    // Recalculate flood when zoom/pan changes (tile segments change per zoom)
+    const onMoveEnd = () => updateFlood();
+    map.on("moveend", onMoveEnd);
+
     return () => {
       cancelled = true;
       clearInterval(floodRetry);
+      map.off("moveend", onMoveEnd);
     };
   }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 

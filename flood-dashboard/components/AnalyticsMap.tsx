@@ -393,9 +393,14 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
     }, 2000);
     updateFlood();
 
+    // Recalculate flood when zoom/pan changes (tile segments change per zoom)
+    const onMoveEnd = () => updateFlood();
+    map.on("moveend", onMoveEnd);
+
     return () => {
       cancelled = true;
       clearInterval(floodRetry);
+      map.off("moveend", onMoveEnd);
     };
   }, [devices, events, floodCounts, mapReady]);
 
