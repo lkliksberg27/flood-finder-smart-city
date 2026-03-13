@@ -322,12 +322,23 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     // Fallback: the Mapbox render loop can stall (frameId stuck at ~5,
     // _styleDirty=true but no new requestAnimationFrame scheduled).
-    // Poll every 500ms: kick the render loop and init sources if needed.
+    // Aggressively kick the render loop for up to 15s to ensure tiles load.
+    let fallbackTicks = 0;
     const fallbackTimer = setInterval(() => {
-      // Kick the render loop — triggerRepaint schedules a new rAF,
-      // _render() forces an immediate frame if the loop stalled.
-      map.triggerRepaint();
-      try { (map as unknown as { _render: () => void })._render(); } catch {}
+      fallbackTicks++;
+
+      // Burst-render multiple frames to catch up on stalled loop
+      const renderFn = (map as unknown as { _render: () => void })._render;
+      try {
+        map.triggerRepaint();
+        for (let i = 0; i < 3; i++) renderFn.call(map);
+      } catch {}
+
+      // Pan nudge forces tile fetching on first few ticks
+      if (fallbackTicks <= 4) {
+        map.panBy([1, 0], { duration: 0 });
+        map.panBy([-1, 0], { duration: 0 });
+      }
 
       // Init sources once style definition is loaded
       if (!map.getSource("device-dots")) {
@@ -339,8 +350,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         } catch {}
       }
 
-      // Stop once map is fully rendered with sources
-      if (map.getSource("device-dots") && map.isStyleLoaded()) {
+      // Stop after 15s or once map is fully rendered
+      if (fallbackTicks > 30 || (map.getSource("device-dots") && map.isStyleLoaded())) {
         clearInterval(fallbackTimer);
       }
     }, 500);
