@@ -330,12 +330,6 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       floodRefreshTimer = setTimeout(() => {
         try {
-          // If no roads cached yet, try querying now that tiles may have loaded
-          if (cachedRoadsRef.current.length === 0) {
-            const newRoads = queryMapboxRoads(map, devicesRef.current);
-            console.log(`[FloodViz] moveend: queried ${newRoads.length} roads`);
-            if (newRoads.length > 0) cachedRoadsRef.current = newRoads;
-          }
           const roads = cachedRoadsRef.current;
           if (roads.length === 0) return;
           const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
@@ -346,13 +340,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       }, 150);
     });
 
-    // --- Render-loop stall fix for Next.js dynamic imports ---
-    // Mapbox render loop stalls: style.load fires but tiles never render.
-    // Root cause: Mapbox's internal rAF chain breaks in Next.js dynamic imports.
-    // Fix: run a continuous rAF chain that keeps calling _render(), and detect
-    // when tiles are finally loaded via the idle event.
-
-    let renderKickActive = true;
+    // --- Render-loop kick for Next.js dynamic imports ---
+    // Mapbox tiles can stall on initial load in Next.js. The base map eventually
+    // loads on its own, but we kick the render loop to speed it up.
 
     // Early source init: poll for style readiness
     const earlyInitTimer = setInterval(() => {
@@ -366,94 +356,25 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       } catch {}
     }, 200);
 
-    // When map reaches idle state (all tiles loaded), query roads for flood viz
-    map.on("idle", () => {
-      if (cachedRoadsRef.current.length > 0) return;
-      const roads = queryMapboxRoads(map, devicesRef.current);
-      console.log(`[FloodViz] idle: queried ${roads.length} roads`);
-      if (roads.length > 0) {
-        cachedRoadsRef.current = roads;
-        try {
-          const roadSrc = map.getSource("flood-roads") as mapboxgl.GeoJSONSource;
-          if (roadSrc) {
-            const features = calculateFloodFeatures(roads, devicesRef.current, floodDepthsRef.current);
-            console.log(`[FloodViz] idle: ${features.length} flood features`);
-            roadSrc.setData({ type: "FeatureCollection", features });
-          }
-        } catch {}
-      }
-    });
-
-    // Continuous rAF chain — mimics the real browser render cycle Mapbox expects
-    const startTime = Date.now();
-    const rAFLoop = () => {
-      if (!renderKickActive) return;
-      // Run for 30s max
-      if (Date.now() - startTime > 30000) { renderKickActive = false; return; }
-      try {
-        map.triggerRepaint();
-        // Access Mapbox internals to force frame scheduling
-        const m = map as unknown as Record<string, unknown>;
-        // _frame is the rAF handle; if null, Mapbox won't render
-        if (m._frame == null) {
-          if (typeof m._render === "function") (m._render as () => void)();
-        }
-      } catch {}
-      requestAnimationFrame(rAFLoop);
-    };
-
     map.once("style.load", () => {
-      console.log("[FloodViz] style.load fired");
       if (!map.getSource("device-dots")) initSources();
-
-      // Start the continuous rAF chain
-      requestAnimationFrame(rAFLoop);
-
-      // Also directly patch Mapbox's _frame to ensure it stays scheduled
-      const m = map as unknown as Record<string, unknown>;
-      const patchInterval = setInterval(() => {
-        if (!renderKickActive) { clearInterval(patchInterval); return; }
-        try {
-          if (m._frame == null) {
-            m._frame = requestAnimationFrame(() => {
-              m._frame = null;
-              if (typeof m._render === "function") (m._render as () => void)();
-            });
-          }
-        } catch {}
-      }, 50);
+      // Kick render loop for 10s to help base map tiles load
+      let ticks = 0;
+      const kickTimer = setInterval(() => {
+        ticks++;
+        try { map.triggerRepaint(); } catch {}
+        if (ticks > 100) clearInterval(kickTimer);
+      }, 100);
     });
 
-    // Last resort at 3s: if style hasn't fully loaded, force a style reload
     const lastResortTimer = setTimeout(() => {
       if (!map.getSource("device-dots")) {
         try { initSources(); } catch {}
       }
-      if (!map.isStyleLoaded()) {
-        console.log("[FloodViz] last resort: reloading style");
-        try {
-          // Re-set the same style to force a complete reload
-          const currentStyle = map.getStyle();
-          if (currentStyle) {
-            map.setStyle(currentStyle);
-            // Re-init sources after style reloads
-            map.once("style.load", () => {
-              console.log("[FloodViz] style reloaded");
-              setTimeout(() => {
-                try { initSources(); } catch {}
-                requestAnimationFrame(rAFLoop);
-              }, 500);
-            });
-          }
-        } catch (e) {
-          console.log("[FloodViz] style reload error:", e);
-        }
-      }
-    }, 3000);
+    }, 5000);
 
     return () => {
       clearInterval(earlyInitTimer);
-      renderKickActive = false;
       clearTimeout(lastResortTimer);
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       resizeObserver.disconnect();
@@ -533,35 +454,40 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const updateFlood = () => {
       if (cancelled) return;
       try {
-        // Use cached roads so flood lines stay locked across zoom/pan
-        let roads = cachedRoadsRef.current;
-        if (roads.length === 0) {
-          roads = queryMapboxRoads(map, devices);
-          if (roads.length > 0) cachedRoadsRef.current = roads;
-        }
-        if (roads.length === 0) { console.log("[FloodViz] updateFlood: no roads cached"); return; }
+        const roads = cachedRoadsRef.current;
+        if (roads.length === 0) return;
         const features = calculateFloodFeatures(roads, devices, depths);
-        console.log(`[FloodViz] updateFlood: ${roads.length} roads → ${features.length} features, depths:`, depths);
         if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) {
         console.error("[FloodViz] updateFlood error:", err);
       }
     };
 
-    // Retry until roads are cached
-    let floodResolved = false;
-    const floodRetry = setInterval(() => {
-      if (cancelled || floodResolved) { clearInterval(floodRetry); return; }
-      const roads = queryMapboxRoads(map, devices);
-      console.log(`[FloodViz] retry: ${roads.length} roads, style loaded: ${map.isStyleLoaded()}, zoom: ${map.getZoom().toFixed(1)}`);
-      if (roads.length > 0) {
-        cachedRoadsRef.current = roads;
-        floodResolved = true;
-        clearInterval(floodRetry);
-        updateFlood();
-      }
-    }, 2000);
-    updateFlood();
+    // Load static road geometry (instant) then calculate flood features
+    if (cachedRoadsRef.current.length === 0) {
+      fetch("/golden-beach-roads.geojson")
+        .then((r) => r.json())
+        .then((geojson: { features: Array<{ geometry: { coordinates: number[][] } }> }) => {
+          if (cancelled) return;
+          const roads = geojson.features.map((f) => f.geometry.coordinates).filter((c) => c.length >= 2);
+          if (roads.length > 0) cachedRoadsRef.current = roads;
+          updateFlood();
+        })
+        .catch(() => {
+          // Fallback: query Mapbox tiles (slower, waits for tile load)
+          const floodRetry = setInterval(() => {
+            if (cancelled) { clearInterval(floodRetry); return; }
+            const roads = queryMapboxRoads(map, devices);
+            if (roads.length > 0) {
+              cachedRoadsRef.current = roads;
+              clearInterval(floodRetry);
+              updateFlood();
+            }
+          }, 2000);
+        });
+    } else {
+      updateFlood();
+    }
 
     return () => {
       cancelled = true;
