@@ -333,6 +333,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           // If no roads cached yet, try querying now that tiles may have loaded
           if (cachedRoadsRef.current.length === 0) {
             const newRoads = queryMapboxRoads(map, devicesRef.current);
+            console.log(`[FloodViz] moveend: queried ${newRoads.length} roads`);
             if (newRoads.length > 0) cachedRoadsRef.current = newRoads;
           }
           const roads = cachedRoadsRef.current;
@@ -366,6 +367,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     // After style loads, kick the render loop (matches manual console fix timing)
     map.once("style.load", () => {
+      console.log("[FloodViz] style.load fired");
       // Init sources immediately if not done
       if (!map.getSource("device-dots")) initSources();
 
@@ -507,8 +509,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           roads = queryMapboxRoads(map, devices);
           if (roads.length > 0) cachedRoadsRef.current = roads;
         }
-        if (roads.length === 0) return;
+        if (roads.length === 0) { console.log("[FloodViz] updateFlood: no roads cached"); return; }
         const features = calculateFloodFeatures(roads, devices, depths);
+        console.log(`[FloodViz] updateFlood: ${roads.length} roads → ${features.length} features, depths:`, depths);
         if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) {
         console.error("[FloodViz] updateFlood error:", err);
@@ -520,6 +523,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const floodRetry = setInterval(() => {
       if (cancelled || floodResolved) { clearInterval(floodRetry); return; }
       const roads = queryMapboxRoads(map, devices);
+      console.log(`[FloodViz] retry: ${roads.length} roads, style loaded: ${map.isStyleLoaded()}, zoom: ${map.getZoom().toFixed(1)}`);
       if (roads.length > 0) {
         cachedRoadsRef.current = roads;
         floodResolved = true;
