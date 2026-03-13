@@ -62,6 +62,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const cachedRoadsRef = useRef<number[][][]>([]);
   const devicesRef = useRef<Device[]>(devices);
   const onDeviceClickRef = useRef(onDeviceClick);
   devicesRef.current = devices;
@@ -473,7 +474,12 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const updateFlood = () => {
       if (cancelled) return;
       try {
-        const roads = queryMapboxRoads(map, devices);
+        // Use cached roads so flood lines stay locked across zoom/pan
+        let roads = cachedRoadsRef.current;
+        if (roads.length === 0) {
+          roads = queryMapboxRoads(map, devices);
+          if (roads.length > 0) cachedRoadsRef.current = roads;
+        }
         if (roads.length === 0) return;
         const features = calculateFloodFeatures(roads, devices, depths);
         if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
@@ -482,12 +488,13 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       }
     };
 
-    // Retry updateFlood every 2s until roads are found (tiles may load late)
+    // Retry until roads are cached
     let floodResolved = false;
     const floodRetry = setInterval(() => {
       if (cancelled || floodResolved) { clearInterval(floodRetry); return; }
       const roads = queryMapboxRoads(map, devices);
       if (roads.length > 0) {
+        cachedRoadsRef.current = roads;
         floodResolved = true;
         clearInterval(floodRetry);
         updateFlood();
@@ -495,14 +502,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     }, 2000);
     updateFlood();
 
-    // Recalculate flood when zoom/pan changes (tile segments change per zoom)
-    const onMoveEnd = () => updateFlood();
-    map.on("moveend", onMoveEnd);
-
     return () => {
       cancelled = true;
       clearInterval(floodRetry);
-      map.off("moveend", onMoveEnd);
     };
   }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
