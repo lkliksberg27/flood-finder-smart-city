@@ -500,8 +500,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           roads = queryMapboxRoads(map, devices);
           if (roads.length > 0) cachedRoadsRef.current = roads;
         }
+        const floodingDevices = devices.filter(d => (depths[d.device_id] ?? 0) > 0);
+        console.log("[FloodViz]", { roads: roads.length, devices: devices.length, flooding: floodingDevices.length, depthKeys: Object.keys(depths).length });
         if (roads.length === 0) return;
         const features = calculateFloodFeatures(roads, devices, depths);
+        console.log("[FloodViz] features:", features.length);
         if (roadSrc) roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) {
         console.error("[FloodViz] updateFlood error:", err);
