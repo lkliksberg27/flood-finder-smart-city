@@ -347,11 +347,12 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     });
 
     // --- Render-loop stall fix for Next.js dynamic imports ---
-    // Mapbox render loop stalls: style.load fires but tiles never fetch/render.
-    // Neither _render() nor _update() unsticks it. Only real user interaction works.
-    // Fix: simulate mouse events on the canvas to wake up Mapbox's event-driven loop.
+    // Mapbox render loop stalls: style.load fires but tiles never render.
+    // Root cause: Mapbox's internal rAF chain breaks in Next.js dynamic imports.
+    // Fix: run a continuous rAF chain that keeps calling _render(), and detect
+    // when tiles are finally loaded via the idle event.
 
-    let renderKickTimer: ReturnType<typeof setInterval> | null = null;
+    let renderKickActive = true;
 
     // Early source init: poll for style readiness
     const earlyInitTimer = setInterval(() => {
@@ -383,82 +384,76 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       }
     });
 
-    // Simulate a mouse interaction on the canvas to wake up Mapbox's render loop
-    const simulateInteraction = () => {
+    // Continuous rAF chain — mimics the real browser render cycle Mapbox expects
+    const startTime = Date.now();
+    const rAFLoop = () => {
+      if (!renderKickActive) return;
+      // Run for 30s max
+      if (Date.now() - startTime > 30000) { renderKickActive = false; return; }
       try {
-        const canvas = map.getCanvas();
-        if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
-        const cx = rect.width / 2;
-        const cy = rect.height / 2;
-        const opts: MouseEventInit = { bubbles: true, clientX: rect.left + cx, clientY: rect.top + cy };
-        canvas.dispatchEvent(new MouseEvent("mousemove", opts));
-        canvas.dispatchEvent(new MouseEvent("mousedown", { ...opts, button: 0 }));
-        canvas.dispatchEvent(new MouseEvent("mousemove", { ...opts, clientX: rect.left + cx + 1, clientY: rect.top + cy + 1 }));
-        canvas.dispatchEvent(new MouseEvent("mouseup", { ...opts, button: 0 }));
-        // Also try wheel event
-        canvas.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -1, clientX: rect.left + cx, clientY: rect.top + cy }));
-        setTimeout(() => {
-          canvas.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 1, clientX: rect.left + cx, clientY: rect.top + cy }));
-        }, 100);
-        console.log("[FloodViz] simulated interaction on canvas");
-      } catch (e) {
-        console.log("[FloodViz] simulateInteraction error:", e);
-      }
+        map.triggerRepaint();
+        // Access Mapbox internals to force frame scheduling
+        const m = map as unknown as Record<string, unknown>;
+        // _frame is the rAF handle; if null, Mapbox won't render
+        if (m._frame == null) {
+          if (typeof m._render === "function") (m._render as () => void)();
+        }
+      } catch {}
+      requestAnimationFrame(rAFLoop);
     };
 
-    // After style loads, start simulation attempts
     map.once("style.load", () => {
       console.log("[FloodViz] style.load fired");
       if (!map.getSource("device-dots")) initSources();
 
-      // Simulate interaction immediately and again at intervals
-      simulateInteraction();
-      let attempts = 0;
-      renderKickTimer = setInterval(() => {
-        attempts++;
-        // Keep simulating until style is loaded or we give up
-        if (!map.isStyleLoaded() && attempts <= 30) {
-          simulateInteraction();
-          map.triggerRepaint();
-        }
-        if (attempts > 60) {
-          if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
-        }
-      }, 500);
+      // Start the continuous rAF chain
+      requestAnimationFrame(rAFLoop);
 
-      // Also try resize + zoom
-      setTimeout(() => {
+      // Also directly patch Mapbox's _frame to ensure it stays scheduled
+      const m = map as unknown as Record<string, unknown>;
+      const patchInterval = setInterval(() => {
+        if (!renderKickActive) { clearInterval(patchInterval); return; }
         try {
-          map.resize();
-          simulateInteraction();
+          if (m._frame == null) {
+            m._frame = requestAnimationFrame(() => {
+              m._frame = null;
+              if (typeof m._render === "function") (m._render as () => void)();
+            });
+          }
         } catch {}
-      }, 1000);
+      }, 50);
     });
 
-    // Last resort at 5s
+    // Last resort at 3s: if style hasn't fully loaded, force a style reload
     const lastResortTimer = setTimeout(() => {
       if (!map.getSource("device-dots")) {
         try { initSources(); } catch {}
       }
-      simulateInteraction();
-      // Keep trying every second for 30s
-      if (!renderKickTimer) {
-        let ticks = 0;
-        renderKickTimer = setInterval(() => {
-          ticks++;
-          simulateInteraction();
-          try { map.triggerRepaint(); } catch {}
-          if (ticks > 30) {
-            if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
+      if (!map.isStyleLoaded()) {
+        console.log("[FloodViz] last resort: reloading style");
+        try {
+          // Re-set the same style to force a complete reload
+          const currentStyle = map.getStyle();
+          if (currentStyle) {
+            map.setStyle(currentStyle);
+            // Re-init sources after style reloads
+            map.once("style.load", () => {
+              console.log("[FloodViz] style reloaded");
+              setTimeout(() => {
+                try { initSources(); } catch {}
+                requestAnimationFrame(rAFLoop);
+              }, 500);
+            });
           }
-        }, 1000);
+        } catch (e) {
+          console.log("[FloodViz] style reload error:", e);
+        }
       }
-    }, 5000);
+    }, 3000);
 
     return () => {
       clearInterval(earlyInitTimer);
-      if (renderKickTimer) clearInterval(renderKickTimer);
+      renderKickActive = false;
       clearTimeout(lastResortTimer);
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       resizeObserver.disconnect();
