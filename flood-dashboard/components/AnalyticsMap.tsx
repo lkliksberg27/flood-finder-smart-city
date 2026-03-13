@@ -211,37 +211,72 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
 
     map.on("load", initSources);
 
-    // Fallback: Mapbox render loop stalls in Next.js dynamic imports.
-    let fallbackTicks = 0;
-    const fallbackTimer = setInterval(() => {
-      fallbackTicks++;
+    // --- Render-loop stall fix (same as MapContainer) ---
+    let renderKickTimer: ReturnType<typeof setInterval> | null = null;
+
+    const earlyInitTimer = setInterval(() => {
+      if (map.getSource("analytics-dots")) { clearInterval(earlyInitTimer); return; }
+      try {
+        const s = (map as unknown as { style?: { _loaded?: boolean } }).style;
+        if (s?._loaded || map.isStyleLoaded()) {
+          initSources();
+          clearInterval(earlyInitTimer);
+        }
+      } catch {}
+    }, 200);
+
+    map.once("style.load", () => {
+      if (!map.getSource("analytics-dots")) initSources();
 
       try {
-        map.triggerRepaint();
-        (map as unknown as { _render: () => void })._render();
+        map.resize();
+        const z = map.getZoom();
+        map.setZoom(z + 0.01);
+        setTimeout(() => { try { map.setZoom(z); } catch {} }, 50);
       } catch {}
 
-      if (fallbackTicks <= 20) {
-        map.panBy([0.1, 0], { duration: 0 });
-        map.panBy([-0.1, 0], { duration: 0 });
-      }
-
-      if (!map.getSource("analytics-dots")) {
+      let ticks = 0;
+      renderKickTimer = setInterval(() => {
+        ticks++;
         try {
-          const styleLoaded = (map as unknown as { style?: { _loaded?: boolean } }).style?._loaded;
-          if (styleLoaded || map.isStyleLoaded()) {
-            initSources();
-          }
+          map.triggerRepaint();
+          (map as unknown as { _render: () => void })._render();
         } catch {}
-      }
+        if (ticks > 100) {
+          if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
+        }
+      }, 100);
+    });
 
-      if (fallbackTicks > 100 || (map.getSource("analytics-dots") && map.isStyleLoaded())) {
-        clearInterval(fallbackTimer);
+    const lastResortTimer = setTimeout(() => {
+      if (!map.getSource("analytics-dots")) {
+        try { initSources(); } catch {}
       }
-    }, 500);
+      if (!renderKickTimer) {
+        let ticks = 0;
+        renderKickTimer = setInterval(() => {
+          ticks++;
+          try {
+            map.triggerRepaint();
+            (map as unknown as { _render: () => void })._render();
+          } catch {}
+          if (ticks > 100) {
+            if (renderKickTimer) { clearInterval(renderKickTimer); renderKickTimer = null; }
+          }
+        }, 100);
+      }
+      try {
+        const c = map.getCenter();
+        const z = map.getZoom();
+        map.jumpTo({ center: [c.lng, c.lat + 0.001], zoom: z });
+        setTimeout(() => { try { map.jumpTo({ center: c, zoom: z }); } catch {} }, 200);
+      } catch {}
+    }, 5000);
 
     return () => {
-      clearInterval(fallbackTimer);
+      clearInterval(earlyInitTimer);
+      if (renderKickTimer) clearInterval(renderKickTimer);
+      clearTimeout(lastResortTimer);
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
