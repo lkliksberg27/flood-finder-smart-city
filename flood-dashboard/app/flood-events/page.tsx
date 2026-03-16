@@ -48,9 +48,13 @@ export default function FloodEventsPage() {
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
 
-  // Compute day boundaries
+  // Compute day boundaries — if today, end at current time instead of midnight
+  const today = toDateStr(new Date());
   const startTime = useMemo(() => new Date(selectedDate + "T00:00:00").getTime(), [selectedDate]);
-  const endTime = useMemo(() => new Date(selectedDate + "T23:59:59").getTime(), [selectedDate]);
+  const endTime = useMemo(() => {
+    if (selectedDate === today) return Date.now();
+    return new Date(selectedDate + "T23:59:59").getTime();
+  }, [selectedDate, today]);
 
   // Load all data once (90 days)
   const loadData = useCallback(async () => {

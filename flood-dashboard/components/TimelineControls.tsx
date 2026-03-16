@@ -43,16 +43,23 @@ export function TimelineControls({
     hour12: true,
   });
 
-  // Hour labels for 24h axis: 12 AM, 3 AM, 6 AM, 9 AM, 12 PM, 3 PM, 6 PM, 9 PM, 12 AM
+  // Hour labels — adapts to the actual range (handles "today" ending before midnight)
   const hourLabels = useMemo(() => {
+    const rangeMs = endTime - startTime;
+    const rangeHours = rangeMs / 3600000;
+    const step = rangeHours > 18 ? 3 : rangeHours > 8 ? 2 : 1;
+    const startHour = new Date(startTime).getHours();
+    const endHour = startHour + rangeHours;
     const out: { pos: number; label: string }[] = [];
-    for (let h = 0; h <= 24; h += 3) {
-      const pos = (h / 24) * 100;
-      const ampm = h === 0 || h === 24 ? "12 AM" : h === 12 ? "12 PM" : h < 12 ? `${h} AM` : `${h - 12} PM`;
+    for (let h = startHour; h <= endHour; h += step) {
+      const pos = ((h - startHour) / rangeHours) * 100;
+      if (pos > 100) break;
+      const hr = h % 24;
+      const ampm = hr === 0 ? "12 AM" : hr === 12 ? "12 PM" : hr < 12 ? `${hr} AM` : `${hr - 12} PM`;
       out.push({ pos, label: ampm });
     }
     return out;
-  }, []);
+  }, [startTime, endTime]);
 
   return (
     <div className="absolute bottom-4 left-4 right-4 z-[1000]">
