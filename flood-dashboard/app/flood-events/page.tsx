@@ -10,6 +10,7 @@ import { TimelineControls } from "@/components/TimelineControls";
 import { ConditionsPanel } from "@/components/ConditionsPanel";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { DayInsights } from "@/components/DayInsights";
+import { OverallTrends } from "@/components/OverallTrends";
 
 const DeviceMap = dynamic(
   () => import("@/components/MapContainer").then((m) => m.DeviceMap),
@@ -238,12 +239,23 @@ export default function FloodEventsPage() {
         </div>
       </div>
 
-      {/* Day Insights — charts below the map */}
-      <div className="mt-3 shrink-0 pb-4">
+      {/* Day Insights — charts for the selected day */}
+      <div className="mt-3 shrink-0">
         <DayInsights
           dayStart={startTime}
           dayEnd={endTime}
           events={filteredEvents}
+        />
+      </div>
+
+      {/* Overall Trends — aggregate charts across 90 days */}
+      <div className="mt-3 shrink-0 pb-4">
+        <OverallTrends
+          events={selectedNeighborhood
+            ? allEvents.filter((e) => (e.devices as Device | undefined)?.neighborhood === selectedNeighborhood)
+            : allEvents
+          }
+          neighborhood={selectedNeighborhood}
         />
       </div>
     </div>
