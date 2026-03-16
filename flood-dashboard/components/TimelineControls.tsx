@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import type { FloodEvent } from "@/lib/types";
-import { generateTimelineTicks, formatTimestamp } from "@/lib/timeline-utils";
+import { generateTimelineTicks } from "@/lib/timeline-utils";
 
 interface Props {
   startTime: number;
@@ -35,24 +35,24 @@ export function TimelineControls({
     [startTime, endTime, floodEvents]
   );
 
-  const { date, time } = formatTimestamp(currentTime);
   const progress = ((currentTime - startTime) / (endTime - startTime)) * 100;
+  const currentDate = new Date(currentTime);
+  const timeStr = currentDate.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
 
-  // Date labels for the timeline axis
-  const range = endTime - startTime;
-  const labelCount = range > 7 * 86400000 ? 5 : range > 86400000 ? 4 : 6;
-  const labels = useMemo(() => {
+  // Hour labels for 24h axis: 12 AM, 3 AM, 6 AM, 9 AM, 12 PM, 3 PM, 6 PM, 9 PM, 12 AM
+  const hourLabels = useMemo(() => {
     const out: { pos: number; label: string }[] = [];
-    for (let i = 0; i <= labelCount; i++) {
-      const t = startTime + (range / labelCount) * i;
-      const d = new Date(t);
-      const label = range > 2 * 86400000
-        ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-        : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
-      out.push({ pos: (i / labelCount) * 100, label });
+    for (let h = 0; h <= 24; h += 3) {
+      const pos = (h / 24) * 100;
+      const ampm = h === 0 || h === 24 ? "12 AM" : h === 12 ? "12 PM" : h < 12 ? `${h} AM` : `${h - 12} PM`;
+      out.push({ pos, label: ampm });
     }
     return out;
-  }, [startTime, range, labelCount]);
+  }, []);
 
   return (
     <div className="absolute bottom-4 left-4 right-4 z-[1000]">
@@ -63,7 +63,7 @@ export function TimelineControls({
             <button
               onClick={() => onTimeChange(startTime)}
               className="p-1.5 rounded-lg hover:bg-bg-card-hover transition-colors text-text-secondary hover:text-text-primary"
-              title="Jump to start"
+              title="Jump to midnight"
             >
               <SkipBack size={14} />
             </button>
@@ -77,15 +77,14 @@ export function TimelineControls({
             <button
               onClick={() => onTimeChange(endTime)}
               className="p-1.5 rounded-lg hover:bg-bg-card-hover transition-colors text-text-secondary hover:text-text-primary"
-              title="Jump to end"
+              title="Jump to end of day"
             >
               <SkipForward size={14} />
             </button>
           </div>
 
-          {/* Timeline slider */}
+          {/* Timeline slider — 24 hour range */}
           <div className="flex-1 min-w-0">
-            {/* Slider track with event ticks */}
             <div className="relative h-6 flex items-center">
               {/* Track background */}
               <div className="absolute inset-x-0 h-1.5 bg-[#1f2937] rounded-full">
@@ -108,7 +107,7 @@ export function TimelineControls({
                     background:
                       tick.severity === "high" ? "#f87171" :
                       tick.severity === "medium" ? "#fbbf24" : "#34d399",
-                    opacity: 0.6,
+                    opacity: 0.7,
                   }}
                 />
               ))}
@@ -125,9 +124,9 @@ export function TimelineControls({
               />
             </div>
 
-            {/* Date labels */}
+            {/* Hour labels */}
             <div className="relative h-4 mt-0.5">
-              {labels.map((l, i) => (
+              {hourLabels.map((l, i) => (
                 <span
                   key={i}
                   className="absolute text-[10px] text-text-secondary -translate-x-1/2 select-none"
@@ -156,10 +155,9 @@ export function TimelineControls({
             ))}
           </div>
 
-          {/* Current timestamp */}
-          <div className="text-right shrink-0 min-w-[80px]">
-            <p className="text-xs font-medium text-text-primary">{date}</p>
-            <p className="text-[11px] text-text-secondary">{time}</p>
+          {/* Current time display */}
+          <div className="text-right shrink-0 min-w-[70px]">
+            <p className="text-sm font-bold text-text-primary">{timeStr}</p>
           </div>
         </div>
       </div>
