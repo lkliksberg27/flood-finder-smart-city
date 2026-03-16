@@ -208,9 +208,9 @@ export function calculateFloodFeatures(
     if (snapRi < 0 || snapBest > 60) continue; // 60m snap radius
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
-    // Coverage: deeper water spreads farther along roads
-    // 1cm→43m, 5cm→55m, 10cm→70m, 20cm→100m, 30cm→130m, 50cm→150m
-    const maxDist = Math.min(150, 40 + sensor.depth * 3);
+    // Coverage: water only appears near the sensor — tight, realistic spread
+    // 5cm→25m, 10cm→30m, 20cm→40m, 30cm→50m
+    const maxDist = Math.min(60, 20 + sensor.depth * 1);
     // sensor snapped
 
     // 2. Compute snapOffset = along-road distance from road-start to snap point

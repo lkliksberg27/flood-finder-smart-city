@@ -224,6 +224,7 @@ export default function FloodEventsPage() {
             endTime={endTime}
             currentTime={currentTime}
             isPlaying={isPlaying}
+            isToday={selectedDate === today}
             playbackSpeed={playbackSpeed}
             onTimeChange={(t) => { setCurrentTime(t); setIsPlaying(false); }}
             onPlayPause={() => setIsPlaying(!isPlaying)}

@@ -8,6 +8,7 @@ import { generateTimelineTicks } from "@/lib/timeline-utils";
 interface Props {
   startTime: number;
   endTime: number;
+  isToday?: boolean;
   currentTime: number;
   isPlaying: boolean;
   playbackSpeed: number;
@@ -24,6 +25,7 @@ export function TimelineControls({
   endTime,
   currentTime,
   isPlaying,
+  isToday,
   playbackSpeed,
   onTimeChange,
   onPlayPause,
@@ -53,13 +55,17 @@ export function TimelineControls({
     const out: { pos: number; label: string }[] = [];
     for (let h = startHour; h <= endHour; h += step) {
       const pos = ((h - startHour) / rangeHours) * 100;
-      if (pos > 100) break;
+      if (pos > 95) break; // leave room for "Now" label
       const hr = h % 24;
       const ampm = hr === 0 ? "12 AM" : hr === 12 ? "12 PM" : hr < 12 ? `${hr} AM` : `${hr - 12} PM`;
       out.push({ pos, label: ampm });
     }
+    // Add "Now" at the end if today
+    if (isToday) {
+      out.push({ pos: 100, label: "Now" });
+    }
     return out;
-  }, [startTime, endTime]);
+  }, [startTime, endTime, isToday]);
 
   return (
     <div className="absolute bottom-4 left-4 right-4 z-[1000]">
