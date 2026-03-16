@@ -11,13 +11,27 @@ export interface TimelineSnapshot {
 
 /**
  * Interpolate flood depth at a given time within an event.
- * Uses a triangle wave: rises to peak at 40% of duration, then falls.
+ *
+ * - Closed events (has ended_at): triangle wave peaking at 40% of duration
+ * - Ongoing events (no ended_at): ramp up over 10 minutes then hold at peak
  */
 export function depthAtTime(event: FloodEvent, timeMs: number): number {
   const startMs = new Date(event.started_at).getTime();
-  const endMs = event.ended_at
-    ? new Date(event.ended_at).getTime()
-    : startMs + (event.duration_minutes ?? 30) * 60000;
+
+  // Ongoing event: no ended_at means still flooding
+  if (!event.ended_at) {
+    const elapsed = timeMs - startMs;
+    if (elapsed < 0) return 0;
+    // Ramp up over 10 minutes, then stay at peak
+    const rampMs = 10 * 60000;
+    if (elapsed < rampMs) {
+      return event.peak_depth_cm * (elapsed / rampMs);
+    }
+    return event.peak_depth_cm;
+  }
+
+  // Closed event: triangle wave
+  const endMs = new Date(event.ended_at).getTime();
   const duration = endMs - startMs;
   if (duration <= 0) return 0;
 
@@ -52,7 +66,7 @@ export function computeSnapshot(
     const startMs = new Date(event.started_at).getTime();
     const endMs = event.ended_at
       ? new Date(event.ended_at).getTime()
-      : startMs + (event.duration_minutes ?? 30) * 60000;
+      : Infinity; // ongoing events have no end
 
     if (timeMs >= startMs && timeMs <= endMs) {
       const depth = depthAtTime(event, timeMs);
