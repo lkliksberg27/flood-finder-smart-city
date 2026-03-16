@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, Mountain, TrendingDown } from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ReferenceLine, Cell,
+} from "recharts";
 import { getAllDevices, getFloodEventCount30d } from "@/lib/queries";
 import { streetElevation, findRoadDips } from "@/lib/geo";
 import type { Device } from "@/lib/types";
@@ -11,6 +15,21 @@ const ElevationMap = dynamic(
   () => import("@/components/ElevationMap").then((m) => m.ElevationMap),
   { ssr: false }
 );
+
+const tooltipStyle = {
+  background: "#111827",
+  border: "1px solid #1f2937",
+  borderRadius: 8,
+  color: "#f3f4f6",
+  fontSize: 12,
+};
+
+function elevColor(elev: number): string {
+  if (elev < 0) return "#dc2626";
+  if (elev < 0.5) return "#f87171";
+  if (elev < 1.0) return "#fbbf24";
+  return "#34d399";
+}
 
 export default function ElevationPage() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -25,12 +44,44 @@ export default function ElevationPage() {
     ]).catch(console.error).finally(() => setLoading(false));
   }, []);
 
-  const sorted = [...devices]
-    .filter((d) => d.altitude_baro != null)
-    .sort((a, b) => streetElevation(a) - streetElevation(b))
-    .slice(0, 10);
+  const dips = useMemo(() => findRoadDips(devices, floodCounts), [devices, floodCounts]);
 
-  const dips = findRoadDips(devices, floodCounts);
+  // Elevation profile data — sorted from lowest to highest
+  const profileData = useMemo(() => {
+    return devices
+      .filter((d) => d.altitude_baro != null)
+      .map((d) => ({
+        id: d.device_id,
+        name: d.name ?? d.device_id,
+        neighborhood: d.neighborhood ?? "",
+        elevation: parseFloat(streetElevation(d).toFixed(2)),
+        floods: floodCounts[d.device_id] ?? 0,
+      }))
+      .sort((a, b) => a.elevation - b.elevation);
+  }, [devices, floodCounts]);
+
+  // Elevation vs flood count scatter data
+  const scatterData = useMemo(() => {
+    return devices
+      .filter((d) => d.altitude_baro != null)
+      .map((d) => ({
+        id: d.device_id,
+        elevation: parseFloat(streetElevation(d).toFixed(2)),
+        floods: floodCounts[d.device_id] ?? 0,
+      }))
+      .sort((a, b) => a.elevation - b.elevation);
+  }, [devices, floodCounts]);
+
+  // Summary stats
+  const stats = useMemo(() => {
+    if (profileData.length === 0) return null;
+    const elevs = profileData.map((d) => d.elevation);
+    const min = Math.min(...elevs);
+    const max = Math.max(...elevs);
+    const avg = elevs.reduce((s, e) => s + e, 0) / elevs.length;
+    const belowOne = profileData.filter((d) => d.elevation < 1.0).length;
+    return { min, max, avg, belowOne, total: profileData.length };
+  }, [profileData]);
 
   if (loading) {
     return (
@@ -44,9 +95,13 @@ export default function ElevationPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Elevation & Road Dip Analysis</h2>
+    <div className="flex flex-col h-[calc(100vh-32px)] overflow-y-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3 shrink-0">
+        <div className="flex items-center gap-3">
+          <Mountain size={20} className="text-status-amber" />
+          <h2 className="text-xl font-semibold">Elevation & Road Dip Analysis</h2>
+        </div>
         <label className="flex items-center gap-2 text-sm text-text-secondary">
           <input
             type="checkbox"
@@ -58,211 +113,173 @@ export default function ElevationPage() {
         </label>
       </div>
 
-      <div className="flex gap-6">
-        <ElevationMap devices={devices} floodCounts={floodCounts} showOverlay={showOverlay} />
-
-        <div className="w-[320px] space-y-6 overflow-y-auto max-h-[calc(100vh-140px)]">
-          {/* Road dips section */}
-          {dips.length > 0 && (
-            <div>
-              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-                <AlertTriangle size={14} className="text-status-amber" />
-                Detected Road Dips
-              </h3>
-              <p className="text-xs text-text-secondary mb-3">
-                Sensors sitting lower than their neighbors — water naturally pools here.
-              </p>
-              <div className="space-y-2">
-                {dips.slice(0, 8).map((d) => {
-                const riskColor =
-                  d.drainageRisk === "critical" ? "text-status-red" :
-                  d.drainageRisk === "high" ? "text-status-amber" :
-                  d.drainageRisk === "moderate" ? "text-status-blue" : "text-status-green";
-                return (
-                  <div key={d.device_id} className="bg-bg-card border border-border-card rounded p-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-mono">{d.device_id}</span>
-                      <span className="text-sm font-bold text-status-red">
-                        -{d.dipCm}cm
-                      </span>
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-xs text-text-secondary">
-                        {d.name ?? d.neighborhood ?? ""}
-                      </span>
-                      <span className={`text-xs font-medium ${
-                        d.floodCount > 3 ? "text-status-red" :
-                        d.floodCount > 0 ? "text-status-amber" : "text-status-green"
-                      }`}>
-                        {d.floodCount} floods/30d
-                      </span>
-                    </div>
-                    <div className="mt-2 flex gap-2 text-xs text-text-secondary">
-                      <span>Elev: {d.elevation_m.toFixed(2)}m</span>
-                      <span>Avg neighbors: {d.avgNeighborElev}m</span>
-                    </div>
-                    <div className="mt-1 flex justify-between text-xs">
-                      <span className="text-text-secondary">
-                        {d.flowAccumulation > 0 ? `${d.flowAccumulation} upstream source${d.flowAccumulation > 1 ? 's' : ''}` : 'No upstream flow'}
-                      </span>
-                      <span className={`font-medium ${riskColor}`}>
-                        {d.drainageRisk.toUpperCase()}
-                      </span>
-                    </div>
-                    {/* Visual dip indicator */}
-                    <div className="mt-2 h-2 bg-bg-primary rounded overflow-hidden">
-                      <div
-                        className="h-full bg-status-red/60 rounded"
-                        style={{ width: `${Math.min(100, d.dipCm / 0.5)}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-              </div>
-            </div>
-          )}
-
-          {/* Lowest locations */}
-          <div>
-            <h3 className="text-sm font-semibold mb-3">Lowest 10 Locations</h3>
-            <div className="space-y-2">
-              {sorted.map((d, i) => {
-                const elev = streetElevation(d);
-                return (
-                <div key={d.device_id} className="bg-bg-card border border-border-card rounded p-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-mono">
-                      <span className="text-text-secondary mr-2">#{i + 1}</span>
-                      {d.device_id}
-                    </span>
-                    <span className={`text-sm font-bold ${
-                      elev < 1 ? "text-status-red" : "text-status-amber"
-                    }`}>
-                      {elev.toFixed(2)}m
-                    </span>
-                  </div>
-                  <div className="flex justify-between mt-0.5">
-                    {d.neighborhood && (
-                      <p className="text-xs text-text-secondary">{d.neighborhood}</p>
-                    )}
-                    <span className="text-xs text-text-secondary">
-                      {floodCounts[d.device_id] ?? 0} floods
-                    </span>
-                  </div>
-                </div>
-                );
-              })}
-              {sorted.length === 0 && (
-                <p className="text-sm text-text-secondary">No elevation data yet.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Neighborhood summary */}
-          {(() => {
-            const nStats: Record<string, { count: number; avgElev: number; dips: number; floods: number }> = {};
-            devices.forEach((d) => {
-              const n = d.neighborhood ?? "Unknown";
-              if (!nStats[n]) nStats[n] = { count: 0, avgElev: 0, dips: 0, floods: 0 };
-              nStats[n].count++;
-              nStats[n].avgElev += streetElevation(d);
-              nStats[n].floods += floodCounts[d.device_id] ?? 0;
-            });
-            dips.forEach((d) => {
-              const n = d.neighborhood ?? "Unknown";
-              if (nStats[n]) nStats[n].dips++;
-            });
-            Object.values(nStats).forEach((ns) => {
-              ns.avgElev = ns.count > 0 ? parseFloat((ns.avgElev / ns.count).toFixed(2)) : 0;
-            });
-            const sorted = Object.entries(nStats).sort((a, b) => b[1].floods - a[1].floods);
-
-            return sorted.length > 0 ? (
-              <div>
-                <h3 className="text-sm font-semibold mb-3">Neighborhood Overview</h3>
-                <div className="space-y-2">
-                  {sorted.map(([name, ns]) => (
-                    <div key={name} className="bg-bg-card border border-border-card rounded p-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium">{name}</span>
-                        <span className={`text-xs font-medium ${
-                          ns.floods > 10 ? "text-status-red" : ns.floods > 0 ? "text-status-amber" : "text-status-green"
-                        }`}>
-                          {ns.floods} floods
-                        </span>
-                      </div>
-                      <div className="flex gap-3 mt-1 text-xs text-text-secondary">
-                        <span>{ns.count} sensors</span>
-                        <span>Avg elev: {ns.avgElev}m</span>
-                        {ns.dips > 0 && <span className="text-status-red">{ns.dips} dip{ns.dips > 1 ? "s" : ""}</span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null;
-          })()}
-
-          {/* Elevation summary stats */}
-          {(() => {
-            const withElev = devices.filter((d) => d.altitude_baro != null);
-            if (withElev.length === 0) return null;
-            const elevs = withElev.map((d) => streetElevation(d));
-            const minElev = Math.min(...elevs);
-            const maxElev = Math.max(...elevs);
-            const avgElev = elevs.reduce((s, e) => s + e, 0) / elevs.length;
-            const belowSeaLevel = withElev.filter((d) => streetElevation(d) < 0.5).length;
-            return (
-              <div className="bg-bg-card border border-border-card rounded-lg p-4">
-                <h3 className="text-sm font-semibold mb-3">Elevation Summary</h3>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <p className="text-text-secondary">Range</p>
-                    <p className="font-medium">{minElev.toFixed(2)}m — {maxElev.toFixed(2)}m</p>
-                  </div>
-                  <div>
-                    <p className="text-text-secondary">Average</p>
-                    <p className="font-medium">{avgElev.toFixed(2)}m NAVD88</p>
-                  </div>
-                  <div>
-                    <p className="text-text-secondary">Road Dips</p>
-                    <p className={`font-medium ${dips.length > 0 ? "text-status-red" : "text-status-green"}`}>
-                      {dips.length} detected
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-text-secondary">Low Risk (&lt;0.5m)</p>
-                    <p className={`font-medium ${belowSeaLevel > 0 ? "text-status-amber" : "text-status-green"}`}>
-                      {belowSeaLevel} sensors
-                    </p>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Legend */}
-          <div className="bg-bg-card border border-border-card rounded p-3">
-            <p className="text-xs text-text-secondary mb-2">Estimated Flood Depth</p>
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-xs text-text-secondary">
-                <div className="w-3 h-3 rounded-full" style={{ background: "#059669" }} />
-                <span>Low risk (&lt;5cm estimated)</span>
-              </div>
-              <div className="flex items-center gap-2 text-xs text-text-secondary">
-                <div className="w-3.5 h-3.5 rounded-full" style={{ background: "#f59e0b" }} />
-                <span>Moderate risk (5-15cm estimated)</span>
-              </div>
-              <div className="flex items-center gap-2 text-xs text-text-secondary">
-                <div className="w-4 h-4 rounded-full" style={{ background: "#dc2626" }} />
-                <span>High risk (&gt;15cm estimated)</span>
-              </div>
-            </div>
-            <p className="text-xs text-text-secondary mt-3 leading-relaxed">
-              Estimates based on elevation relative to neighbors, upstream drainage flow, and 30-day flood history.
+      {/* Summary stats row */}
+      {stats && (
+        <div className="grid grid-cols-5 gap-2 mb-3 shrink-0">
+          <div className="bg-bg-card border border-border-card rounded-lg p-2.5">
+            <p className="text-[10px] text-text-secondary uppercase">Lowest</p>
+            <p className={`text-lg font-bold ${stats.min < 0.5 ? "text-status-red" : "text-status-amber"}`}>
+              {stats.min.toFixed(2)}m
             </p>
           </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-2.5">
+            <p className="text-[10px] text-text-secondary uppercase">Average</p>
+            <p className="text-lg font-bold">{stats.avg.toFixed(2)}m</p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-2.5">
+            <p className="text-[10px] text-text-secondary uppercase">Highest</p>
+            <p className="text-lg font-bold text-status-green">{stats.max.toFixed(2)}m</p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-2.5">
+            <p className="text-[10px] text-text-secondary uppercase">Road Dips</p>
+            <p className={`text-lg font-bold ${dips.length > 0 ? "text-status-red" : "text-status-green"}`}>
+              {dips.length}
+            </p>
+          </div>
+          <div className="bg-bg-card border border-border-card rounded-lg p-2.5">
+            <p className="text-[10px] text-text-secondary uppercase">Below 1m</p>
+            <p className={`text-lg font-bold ${stats.belowOne > 0 ? "text-status-amber" : "text-status-green"}`}>
+              {stats.belowOne}/{stats.total}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Map + Road dips sidebar */}
+      <div className="flex gap-3 shrink-0" style={{ minHeight: "340px" }}>
+        <div className="flex-1">
+          <ElevationMap devices={devices} floodCounts={floodCounts} showOverlay={showOverlay} />
+        </div>
+
+        {/* Road dips panel */}
+        <div className="w-[260px] bg-bg-card border border-border-card rounded-lg p-3 overflow-y-auto" style={{ maxHeight: "340px" }}>
+          <h3 className="text-xs font-semibold mb-2 flex items-center gap-1.5">
+            <AlertTriangle size={12} className="text-status-amber" />
+            Road Dips
+          </h3>
+          {dips.length > 0 ? (
+            <div className="space-y-2">
+              {dips.slice(0, 8).map((d) => (
+                <div key={d.device_id} className="border-b border-border-card pb-2 last:border-b-0">
+                  <div className="flex justify-between text-xs">
+                    <span className="font-mono text-text-secondary">{d.device_id}</span>
+                    <span className="font-bold text-status-red">-{d.dipCm}cm</span>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-text-secondary mt-0.5">
+                    <span>{d.neighborhood ?? ""}</span>
+                    <span className={d.floodCount > 0 ? "text-status-red" : "text-status-green"}>
+                      {d.floodCount} floods
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1.5 bg-bg-primary rounded overflow-hidden">
+                    <div
+                      className="h-full bg-status-red/60 rounded"
+                      style={{ width: `${Math.min(100, d.dipCm * 4)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-text-secondary py-4 text-center">No road dips detected</p>
+          )}
+        </div>
+      </div>
+
+      {/* Elevation Profile + Elevation vs Floods charts */}
+      <div className="grid grid-cols-2 gap-3 mt-3 shrink-0 pb-4">
+        {/* Elevation Profile */}
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingDown size={14} className="text-status-amber" />
+            <h3 className="text-xs font-semibold">Elevation Profile</h3>
+          </div>
+          <p className="text-[10px] text-text-secondary mb-3">
+            All sensors sorted from lowest to highest — red zones are most vulnerable
+          </p>
+          {profileData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={profileData} margin={{ top: 4, right: 4, bottom: 4, left: -10 }}>
+                <XAxis
+                  dataKey="id"
+                  tick={{ fill: "#6b7280", fontSize: 8 }}
+                  axisLine={false}
+                  tickLine={false}
+                  angle={-45}
+                  textAnchor="end"
+                  height={40}
+                />
+                <YAxis
+                  tick={{ fill: "#6b7280", fontSize: 9 }}
+                  axisLine={false}
+                  tickLine={false}
+                  unit="m"
+                />
+                <ReferenceLine y={1.0} stroke="#fbbf24" strokeDasharray="4 4" label={{ value: "1.0m", fill: "#fbbf24", fontSize: 9, position: "right" }} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(v) => [`${v}m`, "Elevation"]}
+                  labelFormatter={(label) => {
+                    const d = profileData.find((p) => p.id === label);
+                    return d ? `${d.id} — ${d.name}` : String(label);
+                  }}
+                />
+                <Bar dataKey="elevation" name="Elevation" radius={[2, 2, 0, 0]}>
+                  {profileData.map((entry, i) => (
+                    <Cell key={i} fill={elevColor(entry.elevation)} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-xs text-text-secondary py-12 text-center">No elevation data</p>
+          )}
+        </div>
+
+        {/* Elevation vs Flood Count */}
+        <div className="bg-bg-card border border-border-card rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <AlertTriangle size={14} className="text-status-red" />
+            <h3 className="text-xs font-semibold">Elevation vs Flood Frequency</h3>
+          </div>
+          <p className="text-[10px] text-text-secondary mb-3">
+            Lower elevation sensors should flood more — if not, drainage is the issue
+          </p>
+          {scatterData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={scatterData} margin={{ top: 4, right: 4, bottom: 4, left: -10 }}>
+                <XAxis
+                  dataKey="id"
+                  tick={{ fill: "#6b7280", fontSize: 8 }}
+                  axisLine={false}
+                  tickLine={false}
+                  angle={-45}
+                  textAnchor="end"
+                  height={40}
+                />
+                <YAxis
+                  tick={{ fill: "#6b7280", fontSize: 9 }}
+                  axisLine={false}
+                  tickLine={false}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  labelFormatter={(label) => {
+                    const d = scatterData.find((p) => p.id === label);
+                    return d ? `${d.id} (${d.elevation}m)` : String(label);
+                  }}
+                />
+                <Bar dataKey="floods" name="Floods (30d)" radius={[2, 2, 0, 0]}>
+                  {scatterData.map((entry, i) => (
+                    <Cell key={i} fill={entry.floods > 3 ? "#f87171" : entry.floods > 0 ? "#fbbf24" : "#1f2937"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-xs text-text-secondary py-12 text-center">No data</p>
+          )}
         </div>
       </div>
     </div>

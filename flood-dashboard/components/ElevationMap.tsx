@@ -304,8 +304,8 @@ export function ElevationMap({ devices, floodCounts, showOverlay }: Props) {
 
   return (
     <div
-      className="flex-1 h-[calc(100vh-140px)] rounded-lg overflow-hidden border border-border-card"
-      style={{ position: "relative" }}
+      className="flex-1 rounded-lg overflow-hidden border border-border-card"
+      style={{ position: "relative", height: "100%", minHeight: "300px" }}
     >
       <div
         ref={containerRef}

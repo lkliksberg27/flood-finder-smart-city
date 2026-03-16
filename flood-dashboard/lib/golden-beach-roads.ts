@@ -168,7 +168,7 @@ export function calculateFloodFeatures(
   // ── Build intersection graph ──
   // Two road endpoints within 15m = same intersection
   // (Mapbox tile boundaries can create gaps between road segment endpoints)
-  const JUNC = 15;
+  const JUNC = 25; // 25m junction merge — catches Mapbox tile boundary gaps
   type Adj = { nri: number; myEnd: 0 | 1; nEnd: 0 | 1 };
   const adj: Adj[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {
@@ -205,12 +205,12 @@ export function calculateFloodFeatures(
         if (d < snapBest) { snapBest = d; snapRi = ri; }
       }
     }
-    if (snapRi < 0 || snapBest > 100) continue; // 100m snap radius to catch sensors not directly on roads
+    if (snapRi < 0 || snapBest > 50) continue; // 50m snap — sensor must be near a road
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
-    // Coverage: deeper water spreads farther along roads
-    // 1cm→60m, 5cm→80m, 10cm→100m, 20cm→140m, 40cm→200m, 50cm→250m
-    const maxDist = Math.min(250, 50 + sensor.depth * 4);
+    // Coverage: deeper water spreads farther along roads, but stays local
+    // 1cm→30m, 5cm→40m, 10cm→50m, 20cm→70m, 30cm→80m
+    const maxDist = Math.min(100, 25 + sensor.depth * 2);
     // sensor snapped
 
     // 2. Compute snapOffset = along-road distance from road-start to snap point
