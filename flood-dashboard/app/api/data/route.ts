@@ -151,6 +151,7 @@ export async function GET(request: Request) {
       case "flood_events_range": {
         const start = searchParams.get("start");
         const end = searchParams.get("end");
+        const neighborhood = searchParams.get("neighborhood");
         if (!start || !end) {
           return NextResponse.json(
             { error: "start and end required" },
@@ -158,14 +159,23 @@ export async function GET(request: Request) {
           );
         }
         // Events that overlap the range: started before range ends AND (ended after range starts OR still ongoing)
-        const { data: rangeData, error: rangeError } = await supabase
+        let rangeQuery = supabase
           .from("flood_events")
           .select("*, devices(*)")
           .lte("started_at", end)
           .or(`ended_at.gte.${start},ended_at.is.null`)
           .order("started_at", { ascending: true });
+        // Server-side neighborhood filter for performance at scale
+        if (neighborhood) {
+          rangeQuery = rangeQuery.eq("devices.neighborhood", neighborhood);
+        }
+        const { data: rangeData, error: rangeError } = await rangeQuery;
         if (rangeError) throw rangeError;
-        return NextResponse.json(rangeData ?? []);
+        // If neighborhood filter was applied via join, filter out nulls
+        const filtered = neighborhood
+          ? (rangeData ?? []).filter((e: Record<string, unknown>) => e.devices != null)
+          : (rangeData ?? []);
+        return NextResponse.json(filtered);
       }
 
       case "sensor_readings": {

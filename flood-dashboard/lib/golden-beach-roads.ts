@@ -122,8 +122,10 @@ export function queryMapboxRoads(
 
   if (rawCoords.length === 0) return [];
 
-  // Keep only roads within 150m of any device
-  const MAX_DIST = 150;
+  // console.log(`[flood] queryMapboxRoads: ${rawCoords.length} raw roads`);
+
+  // Keep only roads within 250m of any flooding device
+  const MAX_DIST = 250;
   return rawCoords.filter((road) => {
     for (const d of devices) {
       const dp = [d.lng, d.lat];
@@ -153,6 +155,7 @@ export function calculateFloodFeatures(
   const flooding = devices
     .filter((d) => (depths[d.device_id] ?? 0) > 0)
     .map((d) => ({ lng: d.lng, lat: d.lat, depth: depths[d.device_id] ?? 0 }));
+  // Removed verbose logging for production performance
   if (flooding.length === 0 || roads.length === 0) return [];
 
   // ── Pre-compute cumulative distance along each road ──
@@ -163,8 +166,9 @@ export function calculateFloodFeatures(
   });
 
   // ── Build intersection graph ──
-  // Two road endpoints within 5m = same intersection (handles tile-edge splits)
-  const JUNC = 5;
+  // Two road endpoints within 15m = same intersection
+  // (Mapbox tile boundaries can create gaps between road segment endpoints)
+  const JUNC = 15;
   type Adj = { nri: number; myEnd: 0 | 1; nEnd: 0 | 1 };
   const adj: Adj[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {
@@ -201,12 +205,13 @@ export function calculateFloodFeatures(
         if (d < snapBest) { snapBest = d; snapRi = ri; }
       }
     }
-    if (snapRi < 0 || snapBest > 30) continue;
+    if (snapRi < 0 || snapBest > 100) continue; // 100m snap radius to catch sensors not directly on roads
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
     // Coverage: deeper water spreads farther along roads
-    // 1cm→18m, 5cm→30m, 10cm→45m, 20cm→75m, 40cm→135m, 50cm→150m
-    const maxDist = Math.min(150, 15 + sensor.depth * 3);
+    // 1cm→60m, 5cm→80m, 10cm→100m, 20cm→140m, 40cm→200m, 50cm→250m
+    const maxDist = Math.min(250, 50 + sensor.depth * 4);
+    // sensor snapped
 
     // 2. Compute snapOffset = along-road distance from road-start to snap point
     let snapOffset = 0;
@@ -329,6 +334,8 @@ export function calculateFloodFeatures(
     }
   }
 
+  // segBest computed
+
   // 5. Subdivide into ~5m pieces for smooth gradient rendering
   const features: GeoJSON.Feature[] = [];
   for (const [, e] of segBest) {
@@ -349,5 +356,6 @@ export function calculateFloodFeatures(
     }
   }
 
+  // features computed
   return features;
 }

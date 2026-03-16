@@ -352,16 +352,23 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         const currentDepths = floodDepthsRef.current;
         if (currentDevices.length === 0) return;
 
+        const floodingCount = currentDevices.filter(d => (currentDepths[d.device_id] ?? 0) > 0).length;
+        // flood refresh
+
         // Query road geometry from Mapbox's vector tiles
         const roads = queryMapboxRoads(map, currentDevices);
         if (roads.length > 0) {
           cachedRoadsRef.current = roads;
         }
-        if (cachedRoadsRef.current.length === 0) return;
+        if (cachedRoadsRef.current.length === 0) {
+          // no roads yet
+          return;
+        }
 
         const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths);
+        // flood features set
         roadSrc.setData({ type: "FeatureCollection", features });
-      } catch { /* tiles not ready */ }
+      } catch (err) { console.error(`[flood-refresh] error:`, err); }
     };
 
     // idle fires when map finishes rendering all tiles — perfect time to query features
