@@ -79,6 +79,15 @@ export async function getFloodEventsFiltered(filters: {
   return results;
 }
 
+// ── Flood Events for Timeline ────────────────────────────────
+export async function getFloodEventsInRange(startDate: string, endDate: string): Promise<FloodEvent[]> {
+  const res = await fetch(
+    `/api/data?table=flood_events_range&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`
+  );
+  if (!res.ok) throw new Error('Failed to fetch flood events in range');
+  return res.json();
+}
+
 // ── Stats ───────────────────────────────────────────────────
 export async function getOverviewStats() {
   const [devices, activeEvents] = await Promise.all([

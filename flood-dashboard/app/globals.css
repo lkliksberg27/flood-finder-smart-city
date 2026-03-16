@@ -110,3 +110,43 @@ tr {
 ::-webkit-scrollbar-thumb:hover {
   background: #4b5563;
 }
+
+/* Timeline slider */
+input[type="range"].timeline-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 24px;
+  background: transparent;
+  outline: none;
+  z-index: 2;
+}
+input[type="range"].timeline-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: 2px solid #1e40af;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+  margin-top: 0;
+}
+input[type="range"].timeline-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: 2px solid #1e40af;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+}
+input[type="range"].timeline-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+  border-radius: 3px;
+}
+input[type="range"].timeline-slider::-moz-range-track {
+  height: 6px;
+  background: transparent;
+  border-radius: 3px;
+}

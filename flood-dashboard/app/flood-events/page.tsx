@@ -1,310 +1,213 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Download, Loader2 } from "lucide-react";
-import { getSupabase } from "@/lib/supabase";
-import { getAllFloodEvents, getNeighborhoods } from "@/lib/queries";
+import { Calendar, Loader2, Clock, CloudRain } from "lucide-react";
+import { getAllDevices, getFloodEventsInRange } from "@/lib/queries";
+import { computeSnapshot } from "@/lib/timeline-utils";
 import type { FloodEvent, Device } from "@/lib/types";
+import { TimelineControls } from "@/components/TimelineControls";
+import { ConditionsPanel } from "@/components/ConditionsPanel";
 
 const DeviceMap = dynamic(
   () => import("@/components/MapContainer").then((m) => m.DeviceMap),
   { ssr: false }
 );
 
-type Severity = "" | "low" | "medium" | "high";
+type Preset = "24h" | "7d" | "30d" | "all";
 
-function getSeverity(depthCm: number): Severity {
-  if (depthCm > 30) return "high";
-  if (depthCm > 10) return "medium";
-  return "low";
+function getPresetRange(preset: Preset): { start: Date; end: Date } {
+  const end = new Date();
+  const start = new Date();
+  switch (preset) {
+    case "24h":
+      start.setHours(start.getHours() - 24);
+      break;
+    case "7d":
+      start.setDate(start.getDate() - 7);
+      break;
+    case "30d":
+      start.setDate(start.getDate() - 30);
+      break;
+    case "all":
+      start.setDate(start.getDate() - 90);
+      break;
+  }
+  return { start, end };
 }
 
 export default function FloodEventsPage() {
-  const [events, setEvents] = useState<FloodEvent[]>([]);
-  const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
-  const [filterNeighborhood, setFilterNeighborhood] = useState("");
-  const [filterStartDate, setFilterStartDate] = useState("");
-  const [filterEndDate, setFilterEndDate] = useState("");
-  const [filterSeverity, setFilterSeverity] = useState<Severity>("");
-  const [selectedEvent, setSelectedEvent] = useState<FloodEvent | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [floodEvents, setFloodEvents] = useState<FloodEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(0);
-  const PAGE_SIZE = 50;
+  const [preset, setPreset] = useState<Preset>("7d");
 
-  const fetchEvents = useCallback(async () => {
+  const [startTime, setStartTime] = useState(0);
+  const [endTime, setEndTime] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+
+  const animRef = useRef<number>(0);
+  const lastFrameRef = useRef<number>(0);
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
+
+  // Load data when preset changes
+  const loadData = useCallback(async (p: Preset) => {
+    setLoading(true);
+    setIsPlaying(false);
     try {
-      const [evts, hoods] = await Promise.all([
-        getAllFloodEvents(500),
-        getNeighborhoods(),
+      const { start, end } = getPresetRange(p);
+      const [devs, evts] = await Promise.all([
+        getAllDevices(),
+        getFloodEventsInRange(start.toISOString(), end.toISOString()),
       ]);
-      setEvents(evts);
-      setNeighborhoods(hoods);
-      setLoading(false);
+      setDevices(devs);
+      setFloodEvents(evts);
+      setStartTime(start.getTime());
+      setEndTime(end.getTime());
+
+      // Start at the first flood event if one exists, otherwise at the start
+      if (evts.length > 0) {
+        const firstEventTime = new Date(evts[0].started_at).getTime();
+        // Go 5 minutes before the first event
+        setCurrentTime(Math.max(start.getTime(), firstEventTime - 5 * 60000));
+      } else {
+        setCurrentTime(start.getTime());
+      }
     } catch (err) {
-      console.error("Failed to load flood events:", err);
+      console.error("Failed to load timeline data:", err);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchEvents();
-  }, [fetchEvents]);
+    loadData(preset);
+  }, [preset, loadData]);
 
-  // Realtime subscription for live flood event updates
+  // Animation loop
   useEffect(() => {
-    const channel = getSupabase()
-      .channel("flood-events-page")
-      .on("postgres_changes", { event: "*", schema: "public", table: "flood_events" }, () => fetchEvents())
-      .subscribe();
-    return () => { getSupabase().removeChannel(channel); };
-  }, [fetchEvents]);
+    if (!isPlaying) {
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+      return;
+    }
 
-  const filtered = events.filter((e) => {
-    if (filterNeighborhood && (e.devices as Device | undefined)?.neighborhood !== filterNeighborhood) return false;
-    if (filterStartDate && e.started_at < filterStartDate) return false;
-    if (filterEndDate && e.started_at > filterEndDate) return false;
-    if (filterSeverity && getSeverity(e.peak_depth_cm) !== filterSeverity) return false;
-    return true;
-  });
+    const animate = (timestamp: number) => {
+      if (lastFrameRef.current === 0) lastFrameRef.current = timestamp;
+      const deltaMs = timestamp - lastFrameRef.current;
+      lastFrameRef.current = timestamp;
 
-  const thisMonth = events.filter((e) => {
-    const d = new Date(e.started_at);
-    const now = new Date();
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  });
+      // Each real second advances playbackSpeed minutes of simulation time
+      const advance = (deltaMs / 1000) * playbackSpeed * 60000;
+      const next = currentTimeRef.current + advance;
 
-  const avgDuration = thisMonth.length
-    ? Math.round(thisMonth.reduce((s, e) => s + (e.duration_minutes ?? 0), 0) / thisMonth.length)
-    : 0;
+      if (next >= endTime) {
+        setCurrentTime(endTime);
+        setIsPlaying(false);
+        return;
+      }
 
-  const deviceCounts: Record<string, number> = {};
-  thisMonth.forEach((e) => { deviceCounts[e.device_id] = (deviceCounts[e.device_id] || 0) + 1; });
-  const worstDevice = Object.entries(deviceCounts).sort((a, b) => b[1] - a[1])[0];
+      setCurrentTime(next);
+      animRef.current = requestAnimationFrame(animate);
+    };
+
+    lastFrameRef.current = 0;
+    animRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+    };
+  }, [isPlaying, playbackSpeed, endTime]);
+
+  // Compute snapshot at current time
+  const snapshot = computeSnapshot(currentTime, floodEvents);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-120px)]">
         <div className="text-center">
           <Loader2 size={32} className="animate-spin text-status-blue mx-auto mb-3" />
-          <p className="text-sm text-text-secondary">Loading flood event history...</p>
+          <p className="text-sm text-text-secondary">Loading timeline data...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Flood Event History</h2>
-        <button
-          onClick={() => window.open("/api/export/events", "_blank")}
-          className="flex items-center gap-2 px-4 py-2 bg-status-blue/20 text-status-blue rounded-lg hover:bg-status-blue/30 transition-colors text-sm"
-        >
-          <Download size={16} /> Export CSV
-        </button>
-      </div>
+    <div className="flex flex-col h-[calc(100vh-32px)]">
+      {/* Header with date presets */}
+      <div className="flex items-center justify-between mb-3 shrink-0">
+        <div className="flex items-center gap-3">
+          <Clock size={20} className="text-status-blue" />
+          <h2 className="text-xl font-semibold">Flood Timeline</h2>
+          <span className="text-xs text-text-secondary bg-bg-card border border-border-card rounded-full px-3 py-1">
+            {floodEvents.length} event{floodEvents.length !== 1 ? "s" : ""} in range
+          </span>
+        </div>
 
-      {/* Stats row */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Events This Month</p>
-          <p className="text-2xl font-bold text-status-amber mt-1">{thisMonth.length}</p>
-        </div>
-        <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Avg Duration</p>
-          <p className="text-2xl font-bold mt-1">{avgDuration} min</p>
-        </div>
-        <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Compound Events</p>
-          <p className="text-2xl font-bold text-status-red mt-1">
-            {thisMonth.filter((e) => (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3).length}
-          </p>
-        </div>
-        <div className="bg-bg-card border border-border-card rounded-lg p-4">
-          <p className="text-xs text-text-secondary uppercase">Worst Location</p>
-          <p className="text-2xl font-bold text-status-red mt-1">
-            {worstDevice ? `${worstDevice[0]} (${worstDevice[1]}x)` : "—"}
-          </p>
+        <div className="flex items-center gap-2">
+          <Calendar size={14} className="text-text-secondary" />
+          {(["24h", "7d", "30d", "all"] as Preset[]).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPreset(p)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                preset === p
+                  ? "bg-status-blue/20 text-status-blue"
+                  : "text-text-secondary hover:text-text-primary hover:bg-bg-card-hover"
+              }`}
+            >
+              {p === "24h" ? "24 Hours" : p === "7d" ? "7 Days" : p === "30d" ? "30 Days" : "All Time"}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Mini map for selected event */}
-      {selectedEvent && selectedEvent.devices && (
-        <div className="mb-6 h-[250px] rounded-lg overflow-hidden border border-border-card">
-          <DeviceMap
-            devices={[selectedEvent.devices as Device]}
-            highlightDeviceId={selectedEvent.device_id}
-          />
-        </div>
-      )}
+      {/* Map + overlays */}
+      <div className="flex-1 relative rounded-lg overflow-hidden border border-border-card">
+        <DeviceMap
+          devices={devices}
+          floodDepths={snapshot.floodDepths}
+          height="100%"
+        />
 
-      {/* Ongoing floods banner */}
-      {(() => {
-        const ongoing = events.filter((e) => !e.ended_at);
-        if (ongoing.length === 0) return null;
-        return (
-          <div className="mb-4 p-3 bg-status-red/10 border border-status-red/20 rounded-lg">
-            <p className="text-sm font-medium text-status-red mb-2">
-              {ongoing.length} Ongoing Flood{ongoing.length > 1 ? "s" : ""} Right Now
-            </p>
-            <div className="flex gap-2 flex-wrap">
-              {ongoing.map((e) => {
-                const dev = e.devices as Device | undefined;
-                return (
-                  <button
-                    key={e.id}
-                    onClick={() => setSelectedEvent(e)}
-                    className="px-3 py-1 bg-status-red/20 rounded text-xs font-mono hover:bg-status-red/30 transition-colors"
-                  >
-                    {e.device_id} — {e.peak_depth_cm}cm
-                    {dev?.neighborhood && <span className="text-text-secondary ml-1">({dev.neighborhood})</span>}
-                  </button>
-                );
-              })}
+        {/* Conditions panel overlay */}
+        <ConditionsPanel
+          currentTime={currentTime}
+          activeCount={snapshot.activeCount}
+          totalDevices={devices.length}
+          avgRainfall={snapshot.avgRainfall}
+          avgTide={snapshot.avgTide}
+          maxDepth={snapshot.maxDepth}
+        />
+
+        {/* Timeline controls overlay */}
+        <TimelineControls
+          startTime={startTime}
+          endTime={endTime}
+          currentTime={currentTime}
+          isPlaying={isPlaying}
+          playbackSpeed={playbackSpeed}
+          onTimeChange={(t) => {
+            setCurrentTime(t);
+            setIsPlaying(false);
+          }}
+          onPlayPause={() => setIsPlaying(!isPlaying)}
+          onSpeedChange={setPlaybackSpeed}
+          floodEvents={floodEvents}
+        />
+
+        {/* No events hint */}
+        {floodEvents.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="bg-[#111827]/90 backdrop-blur-sm border border-border-card rounded-xl p-6 text-center">
+              <CloudRain size={32} className="text-text-secondary mx-auto mb-3" />
+              <p className="text-sm text-text-secondary">No flood events in this time range</p>
+              <p className="text-xs text-text-secondary mt-1">Try selecting a wider date range</p>
             </div>
           </div>
-        );
-      })()}
-
-      {/* Filters */}
-      <div className="flex gap-3 mb-4 flex-wrap items-center">
-        <select
-          value={filterNeighborhood}
-          onChange={(e) => setFilterNeighborhood(e.target.value)}
-          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
-        >
-          <option value="">All Neighborhoods</option>
-          {neighborhoods.map((n) => (
-            <option key={n} value={n}>{n}</option>
-          ))}
-        </select>
-        <select
-          value={filterSeverity}
-          onChange={(e) => setFilterSeverity(e.target.value as Severity)}
-          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
-        >
-          <option value="">All Severities</option>
-          <option value="low">Low (&lt;10cm)</option>
-          <option value="medium">Medium (10-30cm)</option>
-          <option value="high">High (&gt;30cm)</option>
-        </select>
-        <input
-          type="date"
-          value={filterStartDate}
-          onChange={(e) => setFilterStartDate(e.target.value)}
-          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
-          placeholder="Start date"
-        />
-        <input
-          type="date"
-          value={filterEndDate}
-          onChange={(e) => setFilterEndDate(e.target.value)}
-          className="bg-bg-card border border-border-card rounded px-3 py-1.5 text-sm text-text-primary"
-          placeholder="End date"
-        />
-        {(filterNeighborhood || filterSeverity || filterStartDate || filterEndDate) && (
-          <button
-            onClick={() => { setFilterNeighborhood(""); setFilterSeverity(""); setFilterStartDate(""); setFilterEndDate(""); setPage(0); }}
-            className="text-xs text-text-secondary hover:text-text-primary transition-colors"
-          >
-            Clear filters
-          </button>
-        )}
-      </div>
-
-      {/* Events table */}
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs text-text-secondary">{filtered.length} event{filtered.length !== 1 ? "s" : ""} shown</p>
-        {filtered.length > PAGE_SIZE && filtered.length > 0 && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage(Math.max(0, page - 1))}
-              disabled={page === 0}
-              className="px-2 py-1 text-xs bg-bg-card border border-border-card rounded disabled:opacity-30 hover:bg-bg-card-hover transition-colors"
-            >
-              Prev
-            </button>
-            <span className="text-xs text-text-secondary">
-              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}
-            </span>
-            <button
-              onClick={() => setPage(Math.min(Math.floor((filtered.length - 1) / PAGE_SIZE), page + 1))}
-              disabled={(page + 1) * PAGE_SIZE >= filtered.length}
-              className="px-2 py-1 text-xs bg-bg-card border border-border-card rounded disabled:opacity-30 hover:bg-bg-card-hover transition-colors"
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </div>
-      <div className="bg-bg-card border border-border-card rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border-card text-text-secondary text-left">
-              <th className="px-4 py-3">Device</th>
-              <th className="px-4 py-3">Location</th>
-              <th className="px-4 py-3">Severity</th>
-              <th className="px-4 py-3">Started</th>
-              <th className="px-4 py-3">Duration</th>
-              <th className="px-4 py-3">Peak Depth</th>
-              <th className="px-4 py-3">Rainfall</th>
-              <th className="px-4 py-3">Tide</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((e) => {
-              const dev = e.devices as Device | undefined;
-              return (
-                <tr
-                  key={e.id}
-                  onClick={() => setSelectedEvent(e)}
-                  className={`border-b border-border-card cursor-pointer hover:bg-bg-card-hover transition-colors ${
-                    selectedEvent?.id === e.id ? "bg-status-blue/10" : ""
-                  }`}
-                >
-                  <td className="px-4 py-3 font-mono text-xs">{e.device_id}</td>
-                  <td className="px-4 py-3 text-text-secondary">{dev?.neighborhood ?? "—"}</td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                      e.peak_depth_cm > 30 ? "bg-status-red/20 text-status-red" :
-                      e.peak_depth_cm > 10 ? "bg-status-amber/20 text-status-amber" :
-                      "bg-status-green/20 text-status-green"
-                    }`}>
-                      {e.peak_depth_cm > 30 ? "HIGH" : e.peak_depth_cm > 10 ? "MED" : "LOW"}
-                    </span>
-                    {(e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3 && (
-                      <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-status-red/10 text-status-red">
-                        COMPOUND
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">{new Date(e.started_at).toLocaleString()}</td>
-                  <td className="px-4 py-3">
-                    {e.ended_at
-                      ? `${e.duration_minutes} min`
-                      : <span className="text-status-red font-medium flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 bg-status-red rounded-full animate-pulse" />
-                          {Math.round((Date.now() - new Date(e.started_at).getTime()) / 60000)} min
-                        </span>
-                    }
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={
-                      e.peak_depth_cm > 30 ? "text-status-red font-medium" :
-                      e.peak_depth_cm > 10 ? "text-status-amber" : ""
-                    }>
-                      {e.peak_depth_cm}cm
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">{e.rainfall_mm != null ? `${e.rainfall_mm}mm` : "—"}</td>
-                  <td className="px-4 py-3">{e.tide_level_m != null ? `${e.tide_level_m.toFixed(2)}m` : "—"}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {filtered.length === 0 && (
-          <p className="text-center text-text-secondary py-8">No flood events found.</p>
         )}
       </div>
     </div>

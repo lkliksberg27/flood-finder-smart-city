@@ -148,6 +148,26 @@ export async function GET(request: Request) {
         });
       }
 
+      case "flood_events_range": {
+        const start = searchParams.get("start");
+        const end = searchParams.get("end");
+        if (!start || !end) {
+          return NextResponse.json(
+            { error: "start and end required" },
+            { status: 400 }
+          );
+        }
+        // Events that overlap the range: started before range ends AND (ended after range starts OR still ongoing)
+        const { data: rangeData, error: rangeError } = await supabase
+          .from("flood_events")
+          .select("*, devices(*)")
+          .lte("started_at", end)
+          .or(`ended_at.gte.${start},ended_at.is.null`)
+          .order("started_at", { ascending: true });
+        if (rangeError) throw rangeError;
+        return NextResponse.json(rangeData ?? []);
+      }
+
       case "sensor_readings": {
         const deviceId = searchParams.get("device_id");
         const limit = parseInt(searchParams.get("limit") ?? "10");

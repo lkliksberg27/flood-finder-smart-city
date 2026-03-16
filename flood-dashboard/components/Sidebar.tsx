@@ -22,7 +22,7 @@ import { getSupabase } from "@/lib/supabase";
 const navItems = [
   { href: "/", label: "Overview", icon: Map, description: "Live sensor map & weather" },
   { href: "/sensors", label: "Sensors", icon: Radio, description: "Manage all devices" },
-  { href: "/flood-events", label: "Flood Events", icon: CloudRain, description: "Event history & filters" },
+  { href: "/flood-events", label: "Flood Events", icon: CloudRain, description: "Timeline playback & replay" },
   { href: "/analytics", label: "Analytics", icon: BarChart3, description: "Neighborhood & elevation insights" },
   { href: "/ai-recommendations", label: "AI Analysis", icon: BrainCircuit, description: "Infrastructure recommendations" },
 ];
