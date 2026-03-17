@@ -45,25 +45,30 @@ export function TimelineControls({
     hour12: true,
   });
 
-  // Hour labels — adapts to the actual range (handles "today" ending before midnight)
+  // Hour labels — adapts to the actual range
   const hourLabels = useMemo(() => {
     const rangeMs = endTime - startTime;
+    if (rangeMs <= 0) return [];
+
     const rangeHours = rangeMs / 3600000;
+
+    // For very short ranges (< 2 hours, e.g. today just started), just show start + Now
+    if (rangeHours < 2) {
+      const out: { pos: number; label: string }[] = [{ pos: 0, label: "12 AM" }];
+      if (isToday) out.push({ pos: 100, label: "Now" });
+      return out;
+    }
+
     const step = rangeHours > 18 ? 3 : rangeHours > 8 ? 2 : 1;
-    const startHour = new Date(startTime).getHours();
-    const endHour = startHour + rangeHours;
     const out: { pos: number; label: string }[] = [];
-    for (let h = startHour; h <= endHour; h += step) {
-      const pos = ((h - startHour) / rangeHours) * 100;
-      if (pos > 95) break; // leave room for "Now" label
-      const hr = h % 24;
+    for (let h = 0; h <= rangeHours; h += step) {
+      const pos = (h / rangeHours) * 100;
+      if (isToday && pos > 90) break; // leave room for "Now"
+      const hr = (new Date(startTime).getHours() + h) % 24;
       const ampm = hr === 0 ? "12 AM" : hr === 12 ? "12 PM" : hr < 12 ? `${hr} AM` : `${hr - 12} PM`;
       out.push({ pos, label: ampm });
     }
-    // Add "Now" at the end if today
-    if (isToday) {
-      out.push({ pos: 100, label: "Now" });
-    }
+    if (isToday) out.push({ pos: 100, label: "Now" });
     return out;
   }, [startTime, endTime, isToday]);
 

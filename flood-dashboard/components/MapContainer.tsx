@@ -435,6 +435,8 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const dots: GeoJSON.Feature[] = [];
 
     const depths = floodDepths ?? {};
+    const floodingIds = Object.entries(depths).filter(([,v]) => v > 0);
+    if (floodingIds.length > 0) console.log(`[DeviceMap] ${floodingIds.length} flooding:`, floodingIds.map(([k,v]) => `${k}=${v}cm`).join(', '));
     devices.forEach((device) => {
       const depth = depths[device.device_id] ?? 0;
       const color = sensorColor(device.status, depth);
