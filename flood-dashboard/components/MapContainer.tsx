@@ -198,10 +198,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           "line-color": ["interpolate", ["linear"], ["get", "depthNorm"],
             0, "#2980b9", 0.4, "#3498db", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 10, 0.5, 18, 1, 28],
+            0.04, 6, 0.2, 14, 0.5, 22, 1, 30],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.08, 0.4, 0.18, 1, 0.35],
-          "line-blur": 8,
+            0.04, 0.04, 0.2, 0.12, 0.5, 0.22, 1, 0.38],
+          "line-blur": 10,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -213,29 +213,30 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1a5276", 0.3, "#2471a3", 0.6, "#2e86c1", 1, "#5dade2"],
+            0.04, "#154360", 0.15, "#1a5276", 0.35, "#2471a3",
+            0.6, "#2e86c1", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 3, 0.3, 5, 0.6, 7, 1, 10],
+            0.04, 1.5, 0.15, 3, 0.35, 5.5, 0.6, 8, 1, 11],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.45, 0.3, 0.7, 0.6, 0.85, 1, 0.95],
-          "line-blur": 0.5,
+            0.04, 0.2, 0.15, 0.5, 0.35, 0.72, 0.6, 0.88, 1, 0.96],
+          "line-blur": 0.8,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Layer 3: Bright specular core — crisp highlight down the center
+      // Layer 3: Subtle specular core — soft highlight for surface reflection
       map.addLayer({
         id: "flood-road-core",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, "#5dade2", 0.7, "#85c1e9", 1, "#aed6f1"],
+            0.4, "#85c1e9", 0.7, "#aed6f1", 1, "#d4e6f1"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 1, 0.6, 2, 1, 3.5],
+            0.4, 0.8, 0.7, 1.5, 1, 2.5],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 0.3, 0.6, 0.55, 1, 0.8],
-          "line-blur": 0,
+            0.4, 0.15, 0.7, 0.35, 1, 0.55],
+          "line-blur": 0.3,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });

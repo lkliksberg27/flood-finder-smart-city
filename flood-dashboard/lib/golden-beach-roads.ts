@@ -219,7 +219,7 @@ export function calculateFloodFeatures(
         if (d < snapBest) { snapBest = d; snapRi = ri; }
       }
     }
-    if (snapRi < 0 || snapBest > 60) continue; // 60m snap radius
+    if (snapRi < 0 || snapBest > 90) continue; // 90m snap radius — mailbox sensors can be far from road centerline
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
     // Coverage: deeper water spreads farther along roads
@@ -350,19 +350,19 @@ export function calculateFloodFeatures(
 
   // segBest computed
 
-  // 5. Subdivide into ~5m pieces for smooth gradient rendering
+  // 5. Subdivide into ~3m pieces for ultra-smooth gradient rendering
   const features: GeoJSON.Feature[] = [];
   for (const [, e] of segBest) {
     const segLen = ptDist(e.a, e.b);
-    const n = Math.max(1, Math.ceil(segLen / 5));
+    const n = Math.max(1, Math.ceil(segLen / 3));
     for (let p = 0; p < n; p++) {
       const t0 = p / n, t1 = (p + 1) / n;
       const p0 = [e.a[0] + t0 * (e.b[0] - e.a[0]), e.a[1] + t0 * (e.b[1] - e.a[1])];
       const p1 = [e.a[0] + t1 * (e.b[0] - e.a[0]), e.a[1] + t1 * (e.b[1] - e.a[1])];
       const midDist = e.distA + ((t0 + t1) / 2) * (e.distB - e.distA);
-      // Quadratic falloff: water fades smoothly, bright near sensor, dim at edges
+      // Smooth cubic falloff: bright center, gentle fade, near-invisible edges
       const t = Math.min(1, midDist / e.maxDist);
-      const intensity = Math.max(0.12, 1 - t * t);
+      const intensity = Math.max(0.04, (1 - t) * (1 - t * t));
       // Normalized depth: 0→shallow, 1→deep (50cm+)
       const depthNorm = Math.min(1, e.depth / 50);
 
