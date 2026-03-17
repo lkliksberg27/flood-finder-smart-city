@@ -80,7 +80,10 @@ export default function AIRecommendationsPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
-  const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try { return JSON.parse(localStorage.getItem("ff-prefs") ?? "{}").defaultNeighborhood ?? ""; } catch { return ""; }
+  });
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [selectedRec, setSelectedRec] = useState<Recommendation | null>(null);

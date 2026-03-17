@@ -10,6 +10,7 @@ import {
 import { getAllDevices, getFloodEventCount30d } from "@/lib/queries";
 import { streetElevation, findRoadDips } from "@/lib/geo";
 import type { Device } from "@/lib/types";
+import { MapErrorBoundary } from "@/components/ErrorBoundary";
 
 const ElevationMap = dynamic(
   () => import("@/components/ElevationMap").then((m) => m.ElevationMap),
@@ -149,7 +150,9 @@ export default function ElevationPage() {
       {/* Map + Road dips sidebar */}
       <div className="flex gap-3 shrink-0" style={{ minHeight: "340px" }}>
         <div className="flex-1">
-          <ElevationMap devices={devices} floodCounts={floodCounts} showOverlay={showOverlay} />
+          <MapErrorBoundary>
+            <ElevationMap devices={devices} floodCounts={floodCounts} showOverlay={showOverlay} />
+          </MapErrorBoundary>
         </div>
 
         {/* Road dips panel */}

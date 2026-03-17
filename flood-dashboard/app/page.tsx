@@ -22,6 +22,7 @@ import {
 import { getSupabase } from "@/lib/supabase";
 import { getAllDevices, getActiveFloodEvents, getFloodEventCount30d } from "@/lib/queries";
 import { StatCard } from "@/components/StatCard";
+import { MapErrorBoundary } from "@/components/ErrorBoundary";
 import { haversineKm, formatDistance } from "@/lib/geo";
 import type { Device, FloodEvent } from "@/lib/types";
 
@@ -367,15 +368,17 @@ function OverviewContent() {
           )}
         </div>
 
-        <DeviceMap
-          devices={devices}
-          onDeviceClick={(d) => setSelectedDevice(d.device_id)}
-          highlightDeviceId={selectedDevice}
-          searchLocation={selectedLocation}
-          floodDepths={floodDepths}
-          floodCounts={floodCounts}
-          floodConditions={weather ? { rainfallMm: weather.rainfallMm, tideLevelM: weather.tideLevel ?? 0 } : undefined}
-        />
+        <MapErrorBoundary>
+          <DeviceMap
+            devices={devices}
+            onDeviceClick={(d) => setSelectedDevice(d.device_id)}
+            highlightDeviceId={selectedDevice}
+            searchLocation={selectedLocation}
+            floodDepths={floodDepths}
+            floodCounts={floodCounts}
+            floodConditions={weather ? { rainfallMm: weather.rainfallMm, tideLevelM: weather.tideLevel ?? 0 } : undefined}
+          />
+        </MapErrorBoundary>
       </div>
 
       {/* Sidebar - switches between overview and location info */}

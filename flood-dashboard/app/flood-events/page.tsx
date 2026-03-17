@@ -11,6 +11,7 @@ import { ConditionsPanel } from "@/components/ConditionsPanel";
 import { MiniCalendar } from "@/components/MiniCalendar";
 import { DayInsights } from "@/components/DayInsights";
 import { OverallTrends } from "@/components/OverallTrends";
+import { MapErrorBoundary } from "@/components/ErrorBoundary";
 
 const DeviceMap = dynamic(
   () => import("@/components/MapContainer").then((m) => m.DeviceMap),
@@ -35,7 +36,10 @@ export default function FloodEventsPage() {
   const [loading, setLoading] = useState(true);
 
   const [selectedDate, setSelectedDate] = useState(toDateStr(new Date()));
-  const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try { return JSON.parse(localStorage.getItem("ff-prefs") ?? "{}").defaultNeighborhood ?? ""; } catch { return ""; }
+  });
 
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -211,11 +215,13 @@ export default function FloodEventsPage() {
 
       {/* Full-width map */}
       <div className="flex-1 relative rounded-lg overflow-hidden border border-border-card shrink-0" style={{ minHeight: "400px" }}>
-        <DeviceMap
-          devices={filteredDevices}
-          floodDepths={snapshot.floodDepths}
-          height="100%"
-        />
+        <MapErrorBoundary>
+          <DeviceMap
+            devices={filteredDevices}
+            floodDepths={snapshot.floodDepths}
+            height="100%"
+          />
+        </MapErrorBoundary>
 
         <ConditionsPanel
           currentTime={currentTime}
