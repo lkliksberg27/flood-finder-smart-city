@@ -28,6 +28,7 @@ function shiftDay(dateStr: string, delta: number): string {
 }
 
 export default function FloodEventsPage() {
+  useEffect(() => { document.title = "Flood Events — Flood Finder"; }, []);
   const [devices, setDevices] = useState<Device[]>([]);
   const [allEvents, setAllEvents] = useState<FloodEvent[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);

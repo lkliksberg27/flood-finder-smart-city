@@ -27,7 +27,19 @@ export default function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <AuthGate>
-          <div className="flex min-h-screen">
+          {/* Mobile warning */}
+          <div className="lg:hidden fixed inset-0 z-[9999] bg-bg-primary flex items-center justify-center p-8">
+            <div className="text-center max-w-sm">
+              <div className="text-4xl mb-4">🖥️</div>
+              <h2 className="text-lg font-semibold mb-2">Desktop Required</h2>
+              <p className="text-sm text-text-secondary">
+                Flood Finder is a city infrastructure dashboard built for desktop displays.
+                Please open on a computer or laptop for the full experience.
+              </p>
+            </div>
+          </div>
+          {/* Desktop layout */}
+          <div className="hidden lg:flex min-h-screen">
             <Sidebar />
             <main className="ml-[220px] flex-1 p-6 overflow-auto">
               {children}

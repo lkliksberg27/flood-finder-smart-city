@@ -20,6 +20,7 @@ export default function SensorsPage() {
 }
 
 function SensorsContent() {
+  useEffect(() => { document.title = "Sensors — Flood Finder"; }, []);
   const searchParams = useSearchParams();
   const [devices, setDevices] = useState<Device[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);

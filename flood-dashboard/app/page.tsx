@@ -55,6 +55,7 @@ interface GeocodingResult {
 }
 
 function OverviewContent() {
+  useEffect(() => { document.title = "Overview — Flood Finder"; }, []);
   const searchParams = useSearchParams();
   const [devices, setDevices] = useState<Device[]>([]);
   const [activeEvents, setActiveEvents] = useState<FloodEvent[]>([]);

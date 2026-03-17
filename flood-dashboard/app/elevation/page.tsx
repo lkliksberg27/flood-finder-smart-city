@@ -32,6 +32,7 @@ function elevColor(elev: number): string {
 }
 
 export default function ElevationPage() {
+  useEffect(() => { document.title = "Elevation — Flood Finder"; }, []);
   const [devices, setDevices] = useState<Device[]>([]);
   const [floodCounts, setFloodCounts] = useState<Record<string, number>>({});
   const [showOverlay, setShowOverlay] = useState(true);

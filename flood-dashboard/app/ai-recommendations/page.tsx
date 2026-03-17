@@ -74,6 +74,7 @@ interface CacheStatus {
 }
 
 export default function AIRecommendationsPage() {
+  useEffect(() => { document.title = "AI Analysis — Flood Finder"; }, []);
   const { user } = useAuth();
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);

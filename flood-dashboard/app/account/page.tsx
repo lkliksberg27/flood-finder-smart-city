@@ -48,6 +48,7 @@ export default function AccountPage() {
   const [lastAnalysis, setLastAnalysis] = useState<string | null>(null);
 
   useEffect(() => {
+    document.title = "Account — Flood Finder";
     setPrefs(loadPrefs());
 
     // Load neighborhoods
