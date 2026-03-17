@@ -137,8 +137,8 @@ export function queryMapboxRoads(
 
   // console.log(`[flood] queryMapboxRoads: ${rawCoords.length} raw roads`);
 
-  // Keep only roads within 100m of a FLOODING device (not all devices)
-  const MAX_ROAD_DIST = 100;
+  // Keep only roads within 200m of a FLOODING device (not all devices)
+  const MAX_ROAD_DIST = 200;
   return rawCoords.filter((road) => {
     for (const d of devices) {
       if ((depths?.[d.device_id] ?? 0) <= 0) continue; // skip non-flooding
@@ -182,7 +182,7 @@ export function calculateFloodFeatures(
   // ── Build intersection graph ──
   // Two road endpoints within 15m = same intersection
   // (Mapbox tile boundaries can create gaps between road segment endpoints)
-  const JUNC = 15; // 15m junction merge
+  const JUNC = 20; // 20m junction merge — catches Mapbox tile boundary gaps
   type Adj = { nri: number; myEnd: 0 | 1; nEnd: 0 | 1 };
   const adj: Adj[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {
@@ -222,9 +222,9 @@ export function calculateFloodFeatures(
     if (snapRi < 0 || snapBest > 60) continue; // 60m snap radius
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
-    // Coverage: water only appears near the sensor — tight, realistic spread
-    // 5cm→25m, 10cm→30m, 20cm→40m, 30cm→50m
-    const maxDist = Math.min(60, 20 + sensor.depth * 1);
+    // Coverage: deeper water spreads farther along roads
+    // 5cm→55m, 10cm→75m, 20cm→110m, 30cm→145m, 50cm→180m
+    const maxDist = Math.min(180, 40 + sensor.depth * 3);
     // sensor snapped
 
     // 2. Compute snapOffset = along-road distance from road-start to snap point

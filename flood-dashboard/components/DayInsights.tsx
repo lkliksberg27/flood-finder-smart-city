@@ -138,7 +138,7 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
             <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v}cm`, "Peak Depth"]} />
             <Bar dataKey="depth" radius={[0, 4, 4, 0]} name="Peak Depth">
               {sensorData.map((entry, i) => (
-                <rect key={i} fill={entry.depth > 30 ? "#f87171" : entry.depth > 10 ? "#fbbf24" : "#34d399"} />
+                <Cell key={i} fill={entry.depth > 30 ? "#f87171" : entry.depth > 10 ? "#fbbf24" : "#34d399"} />
               ))}
             </Bar>
           </BarChart>

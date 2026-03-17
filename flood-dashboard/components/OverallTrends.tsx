@@ -33,11 +33,11 @@ export function OverallTrends({ events, neighborhood }: Props) {
       weeks[key] = (weeks[key] || 0) + 1;
     }
     return Object.entries(weeks)
+      .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([week, count]) => ({
         week: new Date(week + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }),
         count,
-      }))
-      .sort((a, b) => a.week.localeCompare(b.week));
+      }));
   }, [events]);
 
   // ── Neighborhood comparison ──
