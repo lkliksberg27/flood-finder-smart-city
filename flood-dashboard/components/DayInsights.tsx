@@ -2,10 +2,9 @@
 
 import { useMemo } from "react";
 import {
-  AreaChart, Area, BarChart, Bar,
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
-import { Droplets, CloudRain, Waves, AlertTriangle } from "lucide-react";
 import type { FloodEvent, Device } from "@/lib/types";
 
 const tooltipStyle = {
@@ -16,8 +15,15 @@ const tooltipStyle = {
   fontSize: 12,
 };
 
+const CAUSE_COLORS: Record<string, string> = {
+  "Rain + Tide": "#f87171",
+  "Rain Only": "#3b82f6",
+  "High Tide": "#fbbf24",
+  "Other": "#6b7280",
+};
+
 interface Props {
-  dayStart: number; // ms
+  dayStart: number;
   dayEnd: number;
   events: FloodEvent[];
 }
@@ -29,7 +35,6 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
       hour: h,
       label: h === 0 ? "12a" : h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`,
       floods: 0,
-      peakDepth: 0,
     }));
 
     for (let h = 0; h < 24; h++) {
@@ -39,7 +44,6 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
         const eEnd = evt.ended_at ? new Date(evt.ended_at).getTime() : Infinity;
         if (mid >= eStart && mid <= eEnd) {
           hours[h].floods++;
-          hours[h].peakDepth = Math.max(hours[h].peakDepth, evt.peak_depth_cm);
         }
       }
     }
@@ -50,16 +54,12 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
 
   // ── Chart 2: Worst Sensors ──
   const sensorData = useMemo(() => {
-    const map: Record<string, { name: string; depth: number; neighborhood: string }> = {};
+    const map: Record<string, { name: string; depth: number }> = {};
     for (const evt of events) {
       const dev = evt.devices as Device | undefined;
       const key = evt.device_id;
       if (!map[key] || evt.peak_depth_cm > map[key].depth) {
-        map[key] = {
-          name: dev?.name ?? evt.device_id,
-          depth: evt.peak_depth_cm,
-          neighborhood: dev?.neighborhood ?? "",
-        };
+        map[key] = { name: dev?.name ?? evt.device_id, depth: evt.peak_depth_cm };
       }
     }
     return Object.entries(map)
@@ -68,11 +68,9 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
       .slice(0, 8);
   }, [events]);
 
-  // ── Chart 3: Cause breakdown ──
-  const causes = useMemo(() => {
+  // ── Chart 3: Cause breakdown (pie) ──
+  const pieData = useMemo(() => {
     let rainOnly = 0, tideOnly = 0, compound = 0, dry = 0;
-    let totalRain = 0, totalTide = 0, rainCount = 0, tideCount = 0;
-
     for (const evt of events) {
       const hasRain = (evt.rainfall_mm ?? 0) > 0;
       const hasTide = (evt.tide_level_m ?? 0) > 0.3;
@@ -80,17 +78,13 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
       else if (hasRain) rainOnly++;
       else if (hasTide) tideOnly++;
       else dry++;
-
-      if (evt.rainfall_mm != null) { totalRain += evt.rainfall_mm; rainCount++; }
-      if (evt.tide_level_m != null) { totalTide += evt.tide_level_m; tideCount++; }
     }
-
-    return {
-      rainOnly, tideOnly, compound, dry,
-      avgRain: rainCount > 0 ? totalRain / rainCount : 0,
-      avgTide: tideCount > 0 ? totalTide / tideCount : 0,
-      total: events.length,
-    };
+    return [
+      { name: "Rain + Tide", value: compound },
+      { name: "Rain Only", value: rainOnly },
+      { name: "High Tide", value: tideOnly },
+      { name: "Other", value: dry },
+    ].filter((d) => d.value > 0);
   }, [events]);
 
   if (events.length === 0) {
@@ -123,28 +117,10 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
                 <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <XAxis
-              dataKey="label"
-              tick={{ fill: "#6b7280", fontSize: 9 }}
-              axisLine={false}
-              tickLine={false}
-              interval={5}
-            />
-            <YAxis
-              tick={{ fill: "#6b7280", fontSize: 9 }}
-              axisLine={false}
-              tickLine={false}
-              allowDecimals={false}
-            />
+            <XAxis dataKey="label" tick={{ fill: "#6b7280", fontSize: 9 }} axisLine={false} tickLine={false} interval={5} />
+            <YAxis tick={{ fill: "#6b7280", fontSize: 9 }} axisLine={false} tickLine={false} allowDecimals={false} />
             <Tooltip contentStyle={tooltipStyle} />
-            <Area
-              type="monotone"
-              dataKey="floods"
-              stroke="#3b82f6"
-              strokeWidth={2}
-              fill="url(#floodGrad)"
-              name="Active Floods"
-            />
+            <Area type="monotone" dataKey="floods" stroke="#3b82f6" strokeWidth={2} fill="url(#floodGrad)" name="Active Floods" />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -158,14 +134,7 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
         <ResponsiveContainer width="100%" height={130}>
           <BarChart data={sensorData} layout="vertical" margin={{ top: 0, right: 4, bottom: 0, left: 0 }}>
             <XAxis type="number" tick={{ fill: "#6b7280", fontSize: 9 }} axisLine={false} tickLine={false} unit="cm" />
-            <YAxis
-              type="category"
-              dataKey="id"
-              tick={{ fill: "#9ca3af", fontSize: 9 }}
-              axisLine={false}
-              tickLine={false}
-              width={50}
-            />
+            <YAxis type="category" dataKey="id" tick={{ fill: "#9ca3af", fontSize: 9 }} axisLine={false} tickLine={false} width={50} />
             <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v}cm`, "Peak Depth"]} />
             <Bar dataKey="depth" radius={[0, 4, 4, 0]} name="Peak Depth">
               {sensorData.map((entry, i) => (
@@ -176,58 +145,43 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
         </ResponsiveContainer>
       </div>
 
-      {/* Chart 3: Flood Causes */}
+      {/* Chart 3: Flood Causes — Pie Chart */}
       <div className="bg-bg-card border border-border-card rounded-lg p-3">
-        <p className="text-xs font-semibold text-text-primary mb-3">Flood Causes</p>
-
-        <div className="space-y-2.5">
-          {/* Compound events */}
-          {causes.compound > 0 && (
-            <div className="flex items-center gap-2 px-2 py-1.5 bg-status-red/10 border border-status-red/20 rounded-lg">
-              <AlertTriangle size={13} className="text-status-red shrink-0" />
-              <div className="flex-1">
-                <p className="text-[11px] font-semibold text-status-red">
-                  {causes.compound} Compound
-                </p>
-                <p className="text-[9px] text-text-secondary">Rain + high tide</p>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold text-text-primary">Flood Causes</p>
+          <p className="text-[10px] text-text-secondary">{events.length} total</p>
+        </div>
+        <div className="flex items-center">
+          <ResponsiveContainer width="55%" height={130}>
+            <PieChart>
+              <Pie
+                data={pieData}
+                cx="50%"
+                cy="50%"
+                innerRadius={28}
+                outerRadius={50}
+                paddingAngle={3}
+                dataKey="value"
+                stroke="none"
+              >
+                {pieData.map((entry, i) => (
+                  <Cell key={i} fill={CAUSE_COLORS[entry.name] ?? "#6b7280"} />
+                ))}
+              </Pie>
+              <Tooltip contentStyle={tooltipStyle} formatter={(v, name) => [v, name]} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="flex-1 space-y-1.5">
+            {pieData.map((d) => (
+              <div key={d.name} className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: CAUSE_COLORS[d.name] }} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] text-text-primary truncate">{d.name}</p>
+                </div>
+                <span className="text-[10px] font-bold text-text-primary">{d.value}</span>
               </div>
-              <span className="text-xs font-bold text-status-red">
-                {Math.round((causes.compound / causes.total) * 100)}%
-              </span>
-            </div>
-          )}
-
-          {/* Rain only */}
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <CloudRain size={13} className="text-status-blue shrink-0" />
-            <div className="flex-1">
-              <p className="text-[11px] font-medium text-text-primary">{causes.rainOnly} Rain Only</p>
-              <p className="text-[9px] text-text-secondary">Avg: {causes.avgRain.toFixed(1)}mm</p>
-            </div>
-            <span className="text-xs text-text-secondary">{causes.total > 0 ? Math.round((causes.rainOnly / causes.total) * 100) : 0}%</span>
+            ))}
           </div>
-
-          {/* Tide only */}
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <Waves size={13} className="text-status-amber shrink-0" />
-            <div className="flex-1">
-              <p className="text-[11px] font-medium text-text-primary">{causes.tideOnly} High Tide</p>
-              <p className="text-[9px] text-text-secondary">Avg: {causes.avgTide.toFixed(2)}m</p>
-            </div>
-            <span className="text-xs text-text-secondary">{causes.total > 0 ? Math.round((causes.tideOnly / causes.total) * 100) : 0}%</span>
-          </div>
-
-          {/* Dry flooding */}
-          {causes.dry > 0 && (
-            <div className="flex items-center gap-2 px-2 py-1.5">
-              <Droplets size={13} className="text-text-secondary shrink-0" />
-              <div className="flex-1">
-                <p className="text-[11px] font-medium text-text-primary">{causes.dry} Other</p>
-                <p className="text-[9px] text-text-secondary">No rain or tide data</p>
-              </div>
-              <span className="text-xs text-text-secondary">{Math.round((causes.dry / causes.total) * 100)}%</span>
-            </div>
-          )}
         </div>
       </div>
     </div>
