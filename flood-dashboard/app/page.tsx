@@ -373,6 +373,7 @@ function OverviewContent() {
           searchLocation={selectedLocation}
           floodDepths={floodDepths}
           floodCounts={floodCounts}
+          floodConditions={weather ? { rainfallMm: weather.rainfallMm, tideLevelM: weather.tideLevel ?? 0 } : undefined}
         />
       </div>
 

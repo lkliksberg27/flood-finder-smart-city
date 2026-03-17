@@ -1,12 +1,12 @@
 /**
- * Flood visualization on actual Mapbox roads ONLY.
+ * Flood visualization on actual Mapbox roads.
  *
- * For each flooding sensor:
- * 1. Snap sensor to nearest road → snap point
- * 2. Dijkstra outward along the road network through intersections
- * 3. Water flows along every connected street, branching at intersections
- * 4. Intensity fades by ALONG-ROAD distance (not straight-line)
- * 5. At intersections water splits into ALL branches evenly
+ * Algorithm:
+ * 1. Query ALL road geometry from Mapbox vector tiles
+ * 2. Snap each flooding sensor to its absolute closest road point
+ * 3. Compute spread distance from depth + elevation + rainfall + tide
+ * 4. Elevation-weighted Dijkstra: water flows further downhill, resists uphill
+ * 5. Intensity: cubic falloff + boost for low-lying road segments
  */
 import type { Device } from "./types";
 import type mapboxgl from "mapbox-gl";
@@ -77,6 +77,27 @@ function dedupKey(coords: number[][]): string {
   return `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
 }
 
+/** Street elevation from device data */
+function streetElev(d: Device): number {
+  if (d.altitude_baro == null) return 0;
+  return d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100;
+}
+
+/** Estimate elevation at a road point using inverse-distance weighted nearby devices */
+function estimateElevation(pt: number[], devices: Device[]): number {
+  let totalW = 0;
+  let weightedElev = 0;
+  for (const d of devices) {
+    if (d.altitude_baro == null) continue;
+    const dist = ptDist(pt, [d.lng, d.lat]);
+    if (dist > 500) continue; // only use devices within 500m
+    const w = 1 / Math.max(dist, 10); // inverse distance, min 10m to avoid division issues
+    totalW += w;
+    weightedElev += streetElev(d) * w;
+  }
+  return totalW > 0 ? weightedElev / totalW : 1.0; // default 1.0m if no data
+}
+
 // ─── Mapbox tile query ─────────────────────────────────────────
 
 export function queryMapboxRoads(
@@ -95,7 +116,6 @@ export function queryMapboxRoads(
   const rawCoords: number[][][] = [];
   const seen = new Set<string>();
 
-  // Only skip things that aren't real surface roads
   const SKIP = new Set(["ferry", "aerialway"]);
 
   for (const sourceId of sourceIds) {
@@ -104,7 +124,6 @@ export function queryMapboxRoads(
       for (const f of features) {
         const roadClass = (f.properties?.class ?? "") as string;
         if (SKIP.has(roadClass)) continue;
-        // Skip tunnels — water doesn't pool underground
         if (f.properties?.structure === "tunnel") continue;
 
         if (f.geometry.type === "LineString") {
@@ -131,13 +150,11 @@ export function queryMapboxRoads(
 
   if (rawCoords.length === 0) return [];
 
-  // console.log(`[flood] queryMapboxRoads: ${rawCoords.length} raw roads`);
-
-  // Keep only roads within 150m of a FLOODING device
+  // Keep only roads within 150m of a flooding device
   const MAX_ROAD_DIST = 150;
   return rawCoords.filter((road) => {
     for (const d of devices) {
-      if ((depths?.[d.device_id] ?? 0) <= 0) continue; // skip non-flooding
+      if ((depths?.[d.device_id] ?? 0) <= 0) continue;
       const dp = [d.lng, d.lat];
       for (let i = 0; i < road.length - 1; i++) {
         if (ptSegDist(dp, road[i], road[i + 1]) <= MAX_ROAD_DIST) return true;
@@ -147,26 +164,26 @@ export function queryMapboxRoads(
   });
 }
 
-// ─── Flood flow calculation (Dijkstra along-road) ──────────────
+// ─── Flood conditions (passed from active events) ──────────────
 
-/**
- * Calculate flood water features using along-road distance.
- *
- * Water flows outward from each sensor ALONG the road network:
- * - At every intersection, water branches into ALL connected streets
- * - Intensity fades by how far water has traveled through the network
- * - More water depth = farther spread along roads
- */
+export interface FloodConditions {
+  rainfallMm: number;  // current/avg rainfall
+  tideLevelM: number;  // current/avg tide level
+}
+
+// ─── Flood flow calculation ────────────────────────────────────
+
 export function calculateFloodFeatures(
   roads: number[][][],
   devices: Device[],
   depths: Record<string, number>,
+  conditions?: FloodConditions,
 ): GeoJSON.Feature[] {
-  const flooding = devices
-    .filter((d) => (depths[d.device_id] ?? 0) > 0)
-    .map((d) => ({ lng: d.lng, lat: d.lat, depth: depths[d.device_id] ?? 0 }));
-  // Removed verbose logging for production performance
+  const flooding = devices.filter((d) => (depths[d.device_id] ?? 0) > 0);
   if (flooding.length === 0 || roads.length === 0) return [];
+
+  const rain = conditions?.rainfallMm ?? 0;
+  const tide = conditions?.tideLevelM ?? 0;
 
   // ── Pre-compute cumulative distance along each road ──
   const cumDist: number[][] = roads.map((road) => {
@@ -175,10 +192,14 @@ export function calculateFloodFeatures(
     return cd;
   });
 
+  // ── Estimate elevation at each road endpoint ──
+  const endpointElev: number[][] = roads.map((road) => [
+    estimateElevation(road[0], devices),
+    estimateElevation(road[road.length - 1], devices),
+  ]);
+
   // ── Build intersection graph ──
-  // Two road endpoints within 15m = same intersection
-  // (Mapbox tile boundaries can create gaps between road segment endpoints)
-  const JUNC = 25; // 25m junction merge — catches Mapbox tile boundary gaps
+  const JUNC = 25;
   type Adj = { nri: number; myEnd: 0 | 1; nEnd: 0 | 1 };
   const adj: Adj[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {
@@ -204,10 +225,12 @@ export function calculateFloodFeatures(
     a: number[]; b: number[];
   }>();
 
-  for (const sensor of flooding) {
-    const sp = [sensor.lng, sensor.lat];
+  for (const device of flooding) {
+    const sp = [device.lng, device.lat];
+    const depth = depths[device.device_id] ?? 0;
+    const elev = streetElev(device);
 
-    // 1. Snap sensor to nearest road
+    // 1. Snap to absolute closest road point
     let snapRi = -1, snapBest = Infinity;
     for (let ri = 0; ri < roads.length; ri++) {
       for (let si = 0; si < roads[ri].length - 1; si++) {
@@ -215,15 +238,19 @@ export function calculateFloodFeatures(
         if (d < snapBest) { snapBest = d; snapRi = ri; }
       }
     }
-    if (snapRi < 0 || snapBest > 90) continue; // 90m snap radius — mailbox sensors can be far from road centerline
+    if (snapRi < 0 || snapBest > 90) continue;
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
-    // Coverage: realistic spread — water pools near sensor, spreads modestly
-    // 5cm→55m, 10cm→70m, 20cm→90m, 30cm→110m, 50cm→120m
-    const maxDist = Math.min(120, 40 + sensor.depth * 1.6);
-    // sensor snapped
 
-    // 2. Compute snapOffset = along-road distance from road-start to snap point
+    // 2. Compute spread distance from depth + elevation + rainfall + tide
+    let maxDist = 40 + depth * 1.6;                          // base: depth-proportional
+    if (elev < 1.0) maxDist += (1.0 - elev) * 25;            // low elevation: pools more
+    if (rain > 0) maxDist += Math.min(rain * 1.5, 30);       // rainfall: drains overwhelmed
+    if (tide > 0.3) maxDist += (tide - 0.3) * 40;            // high tide: can't discharge
+    if (rain > 0 && tide > 0.3) maxDist += 15;               // compound event bonus
+    maxDist = Math.min(150, maxDist);
+
+    // 3. Compute snap offset
     let snapOffset = 0;
     {
       const road = roads[snapRi];
@@ -236,13 +263,14 @@ export function calculateFloodFeatures(
     }
     const snapRoadLen = cumDist[snapRi][cumDist[snapRi].length - 1];
 
-    // 3. Dijkstra: compute along-road distance from sensor to every road endpoint
-    //    Water flows outward from snap point, branching at every intersection
-    const ep = new Map<string, number>(); // "ri:0"|"ri:1" → along-road dist
+    // 4. Elevation-weighted Dijkstra
+    //    Water flows further downhill (cost = length * 0.6)
+    //    Water resists going uphill (cost = length * 1.5)
+    //    Flat roads: cost = length
+    const ep = new Map<string, number>();
     ep.set(`${snapRi}:0`, snapOffset);
     ep.set(`${snapRi}:1`, Math.max(0, snapRoadLen - snapOffset));
 
-    // Simple priority queue (small graph, sort is fine)
     const pq: { d: number; ri: number; ei: 0 | 1 }[] = [];
     const pushPQ = (d: number, ri: number, ei: 0 | 1) => {
       pq.push({ d, ri, ei });
@@ -260,7 +288,6 @@ export function calculateFloodFeatures(
       if (visited.has(key)) continue;
       visited.add(key);
 
-      // At this endpoint (intersection), water flows into ALL connected roads
       for (const c of adj[ri]) {
         if (c.myEnd !== ei) continue;
 
@@ -269,15 +296,21 @@ export function calculateFloodFeatures(
         const nOther: 0 | 1 = nEnd === 0 ? 1 : 0;
         const nLen = cumDist[nri][cumDist[nri].length - 1];
 
-        // Water arrives at the connected endpoint of the neighbor road
+        // Elevation-weighted edge cost
+        const fromElev = endpointElev[nri][nEnd];
+        const toElev = endpointElev[nri][nOther];
+        const elevDiff = toElev - fromElev; // positive = uphill
+        let costMultiplier = 1.0;
+        if (elevDiff > 0.05) costMultiplier = 1.4;       // uphill — water resists
+        else if (elevDiff < -0.05) costMultiplier = 0.65; // downhill — water flows easy
+
         const nEndKey = `${nri}:${nEnd}`;
         if (d < (ep.get(nEndKey) ?? Infinity)) {
           ep.set(nEndKey, d);
-          pushPQ(d, nri, nEnd); // process this endpoint to find more connections
+          pushPQ(d, nri, nEnd);
         }
 
-        // Water flows through the neighbor road to the other endpoint
-        const throughDist = d + nLen;
+        const throughDist = d + nLen * costMultiplier;
         const nOtherKey = `${nri}:${nOther}`;
         if (throughDist <= maxDist && throughDist < (ep.get(nOtherKey) ?? Infinity)) {
           ep.set(nOtherKey, throughDist);
@@ -286,10 +319,10 @@ export function calculateFloodFeatures(
       }
     }
 
-    // 4. Render flood on each reachable road
+    // 5. Render flood on each reachable road
     for (let ri = 0; ri < roads.length; ri++) {
-      const ds = ep.get(`${ri}:0`); // along-road dist at road start
-      const de = ep.get(`${ri}:1`); // along-road dist at road end
+      const ds = ep.get(`${ri}:0`);
+      const de = ep.get(`${ri}:1`);
       if (ds === undefined && de === undefined) continue;
 
       const road = roads[ri];
@@ -299,14 +332,11 @@ export function calculateFloodFeatures(
         const cA = cumDist[ri][si];
         const cB = cumDist[ri][si + 1];
 
-        // Along-road distance from sensor at each vertex of this segment
         let dA: number, dB: number;
         if (ri === snapRi) {
-          // Snap road: distance = |snapOffset - vertexPosition|
           dA = Math.abs(snapOffset - cA);
           dB = Math.abs(snapOffset - cB);
         } else {
-          // Other roads: min of path-via-start and path-via-end
           dA = Math.min(
             ds !== undefined ? ds + cA : Infinity,
             de !== undefined ? de + (totalLen - cA) : Infinity,
@@ -317,10 +347,8 @@ export function calculateFloodFeatures(
           );
         }
 
-        // Skip segments fully outside coverage
         if (dA > maxDist && dB > maxDist) continue;
 
-        // Clip at maxDist boundary
         let rA = road[si], rB = road[si + 1];
         let rdA = dA, rdB = dB;
         if (dA > maxDist && dB <= maxDist) {
@@ -333,33 +361,36 @@ export function calculateFloodFeatures(
           rdB = maxDist;
         }
 
-        // Keep the best (closest) result per segment across sensors
         const avgDist = (rdA + rdB) / 2;
         const key = `${ri}|${si}`;
         const ex = segBest.get(key);
         if (!ex || avgDist < (ex.distA + ex.distB) / 2) {
-          segBest.set(key, { distA: rdA, distB: rdB, depth: sensor.depth, maxDist, a: rA, b: rB });
+          segBest.set(key, { distA: rdA, distB: rdB, depth, maxDist, a: rA, b: rB });
         }
       }
     }
   }
 
-  // segBest computed
-
-  // 5. Subdivide into ~3m pieces for ultra-smooth gradient rendering
+  // 6. Subdivide into ~3m pieces for smooth gradient
   const features: GeoJSON.Feature[] = [];
   for (const [, e] of segBest) {
     const segLen = ptDist(e.a, e.b);
     const n = Math.max(1, Math.ceil(segLen / 3));
+
+    // Low-spot intensity boost: estimate elevation at segment midpoint
+    const mid = [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2];
+    const midElev = estimateElevation(mid, devices);
+    const elevBoost = midElev < 0.8 ? Math.min(0.25, (0.8 - midElev) * 0.5) : 0;
+
     for (let p = 0; p < n; p++) {
       const t0 = p / n, t1 = (p + 1) / n;
       const p0 = [e.a[0] + t0 * (e.b[0] - e.a[0]), e.a[1] + t0 * (e.b[1] - e.a[1])];
       const p1 = [e.a[0] + t1 * (e.b[0] - e.a[0]), e.a[1] + t1 * (e.b[1] - e.a[1])];
       const midDist = e.distA + ((t0 + t1) / 2) * (e.distB - e.distA);
-      // Smooth cubic falloff: bright center, gentle fade, near-invisible edges
+
       const t = Math.min(1, midDist / e.maxDist);
-      const intensity = Math.max(0.04, (1 - t) * (1 - t * t));
-      // Normalized depth: 0→shallow, 1→deep (50cm+)
+      const baseIntensity = (1 - t) * (1 - t * t);
+      const intensity = Math.max(0.04, Math.min(1, baseIntensity + elevBoost));
       const depthNorm = Math.min(1, e.depth / 50);
 
       features.push({
@@ -370,6 +401,5 @@ export function calculateFloodFeatures(
     }
   }
 
-  // features computed
   return features;
 }

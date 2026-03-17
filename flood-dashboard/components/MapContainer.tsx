@@ -6,7 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
 import { getReadings24h } from "@/lib/queries";
 import { getSupabase } from "@/lib/supabase";
-import { queryMapboxRoads, calculateFloodFeatures } from "@/lib/golden-beach-roads";
+import { queryMapboxRoads, calculateFloodFeatures, type FloodConditions } from "@/lib/golden-beach-roads";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
@@ -54,9 +54,10 @@ interface Props {
   searchLocation?: { lng: number; lat: number } | null;
   floodDepths?: Record<string, number>;
   floodCounts?: Record<string, number>;
+  floodConditions?: FloodConditions;
 }
 
-export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation, floodDepths, floodCounts }: Props) {
+export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = "100%", searchLocation, floodDepths, floodCounts, floodConditions }: Props) {
   const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
@@ -66,9 +67,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
   const devicesRef = useRef<Device[]>(devices);
   const onDeviceClickRef = useRef(onDeviceClick);
   const floodDepthsRef = useRef<Record<string, number>>({});
+  const floodConditionsRef = useRef<FloodConditions | undefined>(undefined);
   devicesRef.current = devices;
   onDeviceClickRef.current = onDeviceClick;
   floodDepthsRef.current = floodDepths ?? {};
+  floodConditionsRef.current = floodConditions;
 
   const loadPopupData = useCallback(async (deviceId: string) => {
     try {
@@ -378,7 +381,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           return;
         }
 
-        const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths);
+        const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths, floodConditionsRef.current);
         // flood features set
         roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) { console.error(`[flood-refresh] error:`, err); }
@@ -510,7 +513,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         : queryMapboxRoads(map, devices, depths);
       if (roads.length > 0) {
         cachedRoadsRef.current = roads;
-        const features = calculateFloodFeatures(roads, devices, depths);
+        const features = calculateFloodFeatures(roads, devices, depths, floodConditionsRef.current);
         roadSrc.setData({ type: "FeatureCollection", features });
       }
       // If no roads yet, the idle event will pick them up once tiles load
