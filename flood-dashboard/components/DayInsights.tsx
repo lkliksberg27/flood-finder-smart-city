@@ -19,7 +19,7 @@ const CAUSE_COLORS: Record<string, string> = {
   "Rain + Tide": "#f87171",
   "Rain Only": "#3b82f6",
   "High Tide": "#fbbf24",
-  "Other": "#6b7280",
+  "Dry / Unknown": "#6b7280",
 };
 
 interface Props {
@@ -83,7 +83,7 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
       { name: "Rain + Tide", value: compound },
       { name: "Rain Only", value: rainOnly },
       { name: "High Tide", value: tideOnly },
-      { name: "Other", value: dry },
+      { name: "Dry / Unknown", value: dry },
     ].filter((d) => d.value > 0);
   }, [events]);
 

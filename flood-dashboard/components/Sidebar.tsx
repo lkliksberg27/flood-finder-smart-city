@@ -148,7 +148,7 @@ export function Sidebar() {
           type: "neighborhood",
           label: n,
           sublabel: "Neighborhood",
-          href: `/analytics?area=${encodeURIComponent(n)}`,
+          href: `/flood-events`,
         });
       }
     });
