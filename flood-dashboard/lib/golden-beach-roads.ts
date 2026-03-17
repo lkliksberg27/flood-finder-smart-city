@@ -222,9 +222,9 @@ export function calculateFloodFeatures(
     if (snapRi < 0 || snapBest > 90) continue; // 90m snap radius — mailbox sensors can be far from road centerline
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
-    // Coverage: deeper water spreads farther along roads
-    // 1cm→54m, 5cm→70m, 10cm→90m, 20cm→130m, 40cm→210m, 50cm→250m
-    const maxDist = Math.min(250, 50 + sensor.depth * 4);
+    // Coverage: realistic spread — water pools near sensor, spreads modestly
+    // 5cm→55m, 10cm→70m, 20cm→90m, 30cm→110m, 50cm→120m
+    const maxDist = Math.min(120, 40 + sensor.depth * 1.6);
     // sensor snapped
 
     // 2. Compute snapOffset = along-road distance from road-start to snap point

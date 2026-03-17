@@ -189,54 +189,35 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Layer 1: Wide ambient glow — atmospheric light around flood water
+      // Subtle glow underneath flood water
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": ["interpolate", ["linear"], ["get", "depthNorm"],
-            0, "#2980b9", 0.4, "#3498db", 1, "#5dade2"],
+          "line-color": "#3498db",
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 6, 0.2, 14, 0.5, 22, 1, 30],
+            0.1, 10, 0.5, 16, 1, 22],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 0.04, 0.2, 0.12, 0.5, 0.22, 1, 0.38],
-          "line-blur": 10,
+            0.1, 0.06, 0.4, 0.14, 1, 0.28],
+          "line-blur": 6,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Layer 2: Main water body — the visible flood on the road
+      // Flood water on the road
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, "#154360", 0.15, "#1a5276", 0.35, "#2471a3",
-            0.6, "#2e86c1", 1, "#5dade2"],
+            0.1, "#1a5276", 0.4, "#2471a3", 0.7, "#2e86c1", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 1.5, 0.15, 3, 0.35, 5.5, 0.6, 8, 1, 11],
+            0.1, 2, 0.3, 4, 0.6, 6, 1, 8],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 0.2, 0.15, 0.5, 0.35, 0.72, 0.6, 0.88, 1, 0.96],
-          "line-blur": 0.8,
-        },
-        layout: { "line-cap": "round", "line-join": "round" },
-      });
-
-      // Layer 3: Subtle specular core — soft highlight for surface reflection
-      map.addLayer({
-        id: "flood-road-core",
-        type: "line",
-        source: "flood-roads",
-        paint: {
-          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.4, "#85c1e9", 0.7, "#aed6f1", 1, "#d4e6f1"],
-          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.4, 0.8, 0.7, 1.5, 1, 2.5],
-          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.4, 0.15, 0.7, 0.35, 1, 0.55],
-          "line-blur": 0.3,
+            0.1, 0.4, 0.3, 0.65, 0.6, 0.8, 1, 0.92],
+          "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });

@@ -15,7 +15,7 @@ import {
   Zap,
   LogOut,
   Globe,
-  TrendingUp,
+  UserCircle,
 } from "lucide-react";
 import { useAuth } from "@/components/AuthGate";
 import { getSupabase } from "@/lib/supabase";
@@ -23,10 +23,10 @@ import { getSupabase } from "@/lib/supabase";
 const navItems = [
   { href: "/", label: "Overview", icon: Map, description: "Live sensor map & weather" },
   { href: "/sensors", label: "Sensors", icon: Radio, description: "Manage all devices" },
-  { href: "/flood-events", label: "Flood Events", icon: CloudRain, description: "Timeline & playback" },
-  { href: "/analytics", label: "Analytics", icon: TrendingUp, description: "Charts, trends & neighborhood analysis" },
+  { href: "/flood-events", label: "Flood Events", icon: CloudRain, description: "Timeline, analytics & trends" },
   { href: "/elevation", label: "Elevation", icon: BarChart3, description: "Elevation & road dip analysis" },
   { href: "/ai-recommendations", label: "AI Analysis", icon: BrainCircuit, description: "Infrastructure recommendations" },
+  { href: "/account", label: "Account", icon: UserCircle, description: "Profile & preferences" },
 ];
 
 interface QuickResult {
