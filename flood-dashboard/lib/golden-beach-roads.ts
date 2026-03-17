@@ -95,10 +95,10 @@ export function queryMapboxRoads(
   const rawCoords: number[][][] = [];
   const seen = new Set<string>();
 
-  // Only include local streets — exclude highways, bridges, paths, ferry routes
+  // Exclude elevated highways and non-roads — keep all surface streets
   const EXCLUDE_CLASSES = new Set([
-    "motorway", "trunk", "primary", "ferry", "path", "pedestrian",
-    "motorway_link", "trunk_link", "primary_link", "aerialway",
+    "motorway", "trunk", "ferry", "path", "pedestrian",
+    "motorway_link", "trunk_link", "aerialway",
   ]);
 
   for (const sourceId of sourceIds) {
