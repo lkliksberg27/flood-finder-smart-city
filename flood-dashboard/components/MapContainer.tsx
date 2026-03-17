@@ -189,7 +189,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Outer glow — soft ambient light around flood water
+      // Glow underneath flood water
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
@@ -197,10 +197,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         paint: {
           "line-color": "#3498db",
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.2, 16, 0.6, 24, 1, 32],
+            0.3, 12, 1, 20],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.2, 0.12, 0.6, 0.25, 1, 0.4],
-          "line-blur": 8,
+            0.3, 0.15, 1, 0.35],
+          "line-blur": 6,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -212,11 +212,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.2, "#1a5276", 0.4, "#2471a3", 0.7, "#3498db", 1, "#85c1e9"],
+            0.3, "#2471a3", 0.6, "#3498db", 1, "#85c1e9"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.2, 5, 0.5, 7, 0.8, 9, 1, 11],
+            0.3, 4, 0.6, 6, 1, 8],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.2, 0.6, 0.5, 0.8, 1, 0.95],
+            0.3, 0.7, 0.6, 0.85, 1, 0.95],
           "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
