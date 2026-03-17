@@ -95,21 +95,17 @@ export function queryMapboxRoads(
   const rawCoords: number[][][] = [];
   const seen = new Set<string>();
 
-  // Exclude elevated highways and non-roads — keep all surface streets
-  const EXCLUDE_CLASSES = new Set([
-    "motorway", "trunk", "ferry", "path", "pedestrian",
-    "motorway_link", "trunk_link", "aerialway",
-  ]);
+  // Only skip things that aren't real surface roads
+  const SKIP = new Set(["ferry", "aerialway"]);
 
   for (const sourceId of sourceIds) {
     try {
       const features = map.querySourceFeatures(sourceId, { sourceLayer: "road" });
       for (const f of features) {
-        // Filter out non-street road types
         const roadClass = (f.properties?.class ?? "") as string;
-        if (EXCLUDE_CLASSES.has(roadClass)) continue;
-        // Skip bridges — water doesn't pool on elevated structures
-        if (f.properties?.structure === "bridge") continue;
+        if (SKIP.has(roadClass)) continue;
+        // Skip tunnels — water doesn't pool underground
+        if (f.properties?.structure === "tunnel") continue;
 
         if (f.geometry.type === "LineString") {
           const coords = (f.geometry as GeoJSON.LineString).coordinates as number[][];
@@ -137,8 +133,8 @@ export function queryMapboxRoads(
 
   // console.log(`[flood] queryMapboxRoads: ${rawCoords.length} raw roads`);
 
-  // Keep only roads within 250m of a FLOODING device (not all devices)
-  const MAX_ROAD_DIST = 250;
+  // Keep only roads within 150m of a FLOODING device
+  const MAX_ROAD_DIST = 150;
   return rawCoords.filter((road) => {
     for (const d of devices) {
       if ((depths?.[d.device_id] ?? 0) <= 0) continue; // skip non-flooding
