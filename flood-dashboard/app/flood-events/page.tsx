@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { Loader2, Clock, CloudRain, MapPin } from "lucide-react";
+import { Loader2, Clock, CloudRain, MapPin, ChevronLeft, ChevronRight } from "lucide-react";
 import { getAllDevices, getFloodEventsInRange, getNeighborhoods } from "@/lib/queries";
 import { computeSnapshot } from "@/lib/timeline-utils";
 import type { FloodEvent, Device } from "@/lib/types";
@@ -21,11 +21,10 @@ function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function dayLabel(dateStr: string): string {
+function shiftDay(dateStr: string, delta: number): string {
   const d = new Date(dateStr + "T12:00:00");
-  const today = toDateStr(new Date());
-  if (dateStr === today) return "Today";
-  return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  d.setDate(d.getDate() + delta);
+  return toDateStr(d);
 }
 
 export default function FloodEventsPage() {
@@ -34,11 +33,9 @@ export default function FloodEventsPage() {
   const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Filters
   const [selectedDate, setSelectedDate] = useState(toDateStr(new Date()));
   const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
 
-  // Timeline state
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
@@ -48,15 +45,16 @@ export default function FloodEventsPage() {
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
 
-  // Compute day boundaries — if today, end at current time instead of midnight
   const today = toDateStr(new Date());
+  const isToday = selectedDate === today;
   const startTime = useMemo(() => new Date(selectedDate + "T00:00:00").getTime(), [selectedDate]);
   const endTime = useMemo(() => {
     if (selectedDate === today) return Date.now();
     return new Date(selectedDate + "T23:59:59").getTime();
-  }, [selectedDate, today]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
 
-  // Load all data once (90 days)
+  // Load all data once
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -79,7 +77,6 @@ export default function FloodEventsPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Filter events for the selected day
   const dayEvents = useMemo(() => {
     return allEvents.filter((e) => {
       const eStart = new Date(e.started_at).getTime();
@@ -88,7 +85,6 @@ export default function FloodEventsPage() {
     });
   }, [allEvents, startTime, endTime]);
 
-  // Filter by neighborhood
   const filteredEvents = useMemo(() => {
     if (!selectedNeighborhood) return dayEvents;
     return dayEvents.filter((e) => {
@@ -102,7 +98,6 @@ export default function FloodEventsPage() {
     return devices.filter((d) => d.neighborhood === selectedNeighborhood);
   }, [devices, selectedNeighborhood]);
 
-  // Calendar data: which days have events + counts
   const { eventDays, eventCounts } = useMemo(() => {
     const days = new Set<string>();
     const counts: Record<string, number> = {};
@@ -114,7 +109,6 @@ export default function FloodEventsPage() {
     return { eventDays: days, eventCounts: counts };
   }, [allEvents]);
 
-  // Jump to first event when changing date/neighborhood
   useEffect(() => {
     setIsPlaying(false);
     if (filteredEvents.length > 0) {
@@ -125,7 +119,7 @@ export default function FloodEventsPage() {
     }
   }, [selectedDate, selectedNeighborhood, filteredEvents.length, startTime, endTime]);
 
-  // Animation loop
+  // Animation
   useEffect(() => {
     if (!isPlaying) {
       if (animRef.current) cancelAnimationFrame(animRef.current);
@@ -137,11 +131,7 @@ export default function FloodEventsPage() {
       lastFrameRef.current = timestamp;
       const advance = (deltaMs / 1000) * playbackSpeed * 60000;
       const next = currentTimeRef.current + advance;
-      if (next >= endTime) {
-        setCurrentTime(endTime);
-        setIsPlaying(false);
-        return;
-      }
+      if (next >= endTime) { setCurrentTime(endTime); setIsPlaying(false); return; }
       setCurrentTime(next);
       animRef.current = requestAnimationFrame(animate);
     };
@@ -165,36 +155,12 @@ export default function FloodEventsPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-32px)] overflow-y-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3 shrink-0">
-        <div className="flex items-center gap-3">
-          <Clock size={20} className="text-status-blue" />
-          <h2 className="text-xl font-semibold">Flood Timeline</h2>
-          <span className="text-xs text-text-secondary">
-            {dayLabel(selectedDate)}
-            {selectedNeighborhood && ` — ${selectedNeighborhood}`}
-            {" · "}
-            {filteredEvents.length} event{filteredEvents.length !== 1 ? "s" : ""}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <MapPin size={14} className="text-text-secondary" />
-          <select
-            value={selectedNeighborhood}
-            onChange={(e) => setSelectedNeighborhood(e.target.value)}
-            className="bg-bg-card border border-border-card rounded-lg px-3 py-1.5 text-xs text-text-primary"
-          >
-            <option value="">All Neighborhoods</option>
-            {neighborhoods.map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+      {/* Compact header: title + calendar + day nav + neighborhood */}
+      <div className="flex items-center gap-3 mb-2 shrink-0 flex-wrap">
+        <Clock size={18} className="text-status-blue shrink-0" />
+        <h2 className="text-lg font-semibold shrink-0">Flood Timeline</h2>
 
-      {/* Main content: Calendar + Map */}
-      <div className="flex gap-3 shrink-0" style={{ minHeight: 0 }}>
-        {/* Calendar sidebar */}
+        {/* Calendar dropdown */}
         <MiniCalendar
           selectedDate={selectedDate}
           onSelect={setSelectedDate}
@@ -202,58 +168,93 @@ export default function FloodEventsPage() {
           eventCounts={eventCounts}
         />
 
-        {/* Map + timeline */}
-        <div className="flex-1 relative rounded-lg overflow-hidden border border-border-card" style={{ minHeight: "380px" }}>
-          <DeviceMap
-            devices={filteredDevices}
-            floodDepths={snapshot.floodDepths}
-            height="100%"
-          />
+        {/* Prev/next day */}
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setSelectedDate(shiftDay(selectedDate, -1))}
+            className="p-1 rounded hover:bg-bg-card-hover text-text-secondary hover:text-text-primary"
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <button
+            onClick={() => { if (shiftDay(selectedDate, 1) <= today) setSelectedDate(shiftDay(selectedDate, 1)); }}
+            disabled={selectedDate >= today}
+            className="p-1 rounded hover:bg-bg-card-hover text-text-secondary hover:text-text-primary disabled:opacity-30"
+          >
+            <ChevronRight size={14} />
+          </button>
+        </div>
 
-          <ConditionsPanel
-            currentTime={currentTime}
-            activeCount={snapshot.activeCount}
-            totalDevices={filteredDevices.length}
-            avgRainfall={snapshot.avgRainfall}
-            avgTide={snapshot.avgTide}
-            maxDepth={snapshot.maxDepth}
-          />
+        <span className="text-xs text-text-secondary">
+          {filteredEvents.length} event{filteredEvents.length !== 1 ? "s" : ""}
+        </span>
 
-          <TimelineControls
-            startTime={startTime}
-            endTime={endTime}
-            currentTime={currentTime}
-            isPlaying={isPlaying}
-            isToday={selectedDate === today}
-            playbackSpeed={playbackSpeed}
-            onTimeChange={(t) => { setCurrentTime(t); setIsPlaying(false); }}
-            onPlayPause={() => setIsPlaying(!isPlaying)}
-            onSpeedChange={setPlaybackSpeed}
-            floodEvents={filteredEvents}
-          />
+        {/* Spacer */}
+        <div className="flex-1" />
 
-          {filteredEvents.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="bg-[#111827]/90 backdrop-blur-sm border border-border-card rounded-xl p-6 text-center">
-                <CloudRain size={32} className="text-text-secondary mx-auto mb-3" />
-                <p className="text-sm text-text-secondary">No flood events on {dayLabel(selectedDate)}</p>
-                <p className="text-xs text-text-secondary mt-1">Pick a day with a colored dot on the calendar</p>
-              </div>
-            </div>
-          )}
+        {/* Neighborhood filter */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <MapPin size={13} className="text-text-secondary" />
+          <select
+            value={selectedNeighborhood}
+            onChange={(e) => setSelectedNeighborhood(e.target.value)}
+            className="bg-bg-card border border-border-card rounded-lg px-2.5 py-1 text-xs text-text-primary"
+          >
+            <option value="">All Areas</option>
+            {neighborhoods.map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
         </div>
       </div>
 
-      {/* Day Insights — charts for the selected day */}
-      <div className="mt-3 shrink-0">
-        <DayInsights
-          dayStart={startTime}
-          dayEnd={endTime}
-          events={filteredEvents}
+      {/* Full-width map */}
+      <div className="flex-1 relative rounded-lg overflow-hidden border border-border-card shrink-0" style={{ minHeight: "400px" }}>
+        <DeviceMap
+          devices={filteredDevices}
+          floodDepths={snapshot.floodDepths}
+          height="100%"
         />
+
+        <ConditionsPanel
+          currentTime={currentTime}
+          activeCount={snapshot.activeCount}
+          totalDevices={filteredDevices.length}
+          avgRainfall={snapshot.avgRainfall}
+          avgTide={snapshot.avgTide}
+          maxDepth={snapshot.maxDepth}
+        />
+
+        <TimelineControls
+          startTime={startTime}
+          endTime={endTime}
+          currentTime={currentTime}
+          isPlaying={isPlaying}
+          isToday={isToday}
+          playbackSpeed={playbackSpeed}
+          onTimeChange={(t) => { setCurrentTime(t); setIsPlaying(false); }}
+          onPlayPause={() => setIsPlaying(!isPlaying)}
+          onSpeedChange={setPlaybackSpeed}
+          floodEvents={filteredEvents}
+        />
+
+        {filteredEvents.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="bg-[#111827]/90 backdrop-blur-sm border border-border-card rounded-xl p-6 text-center">
+              <CloudRain size={28} className="text-text-secondary mx-auto mb-2" />
+              <p className="text-sm text-text-secondary">No floods on this day</p>
+              <p className="text-xs text-text-secondary mt-1">Pick a day with a dot on the calendar</p>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Overall Trends — aggregate charts across 90 days */}
+      {/* Day Insights */}
+      <div className="mt-3 shrink-0">
+        <DayInsights dayStart={startTime} dayEnd={endTime} events={filteredEvents} />
+      </div>
+
+      {/* Overall Trends */}
       <div className="mt-3 shrink-0 pb-4">
         <OverallTrends
           events={selectedNeighborhood
