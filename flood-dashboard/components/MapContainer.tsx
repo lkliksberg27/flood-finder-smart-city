@@ -189,48 +189,79 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Glow underneath flood water
+      // Layer 1: Wide ambient glow — atmospheric light around flood water
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#3498db",
+          "line-color": ["interpolate", ["linear"], ["get", "depthNorm"],
+            0, "#2980b9", 0.4, "#3498db", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 12, 1, 20],
+            0.1, 10, 0.5, 18, 1, 28],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 0.15, 1, 0.35],
-          "line-blur": 6,
+            0.1, 0.08, 0.4, 0.18, 1, 0.35],
+          "line-blur": 8,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Crisp flood water — colors the road itself
+      // Layer 2: Main water body — the visible flood on the road
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, "#2471a3", 0.6, "#3498db", 1, "#85c1e9"],
+            0.1, "#1a5276", 0.3, "#2471a3", 0.6, "#2e86c1", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 4, 0.6, 6, 1, 8],
+            0.1, 3, 0.3, 5, 0.6, 7, 1, 10],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.3, 0.7, 0.6, 0.85, 1, 0.95],
+            0.1, 0.45, 0.3, 0.7, 0.6, 0.85, 1, 0.95],
+          "line-blur": 0.5,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      // Layer 3: Bright specular core — crisp highlight down the center
+      map.addLayer({
+        id: "flood-road-core",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
+            0.3, "#5dade2", 0.7, "#85c1e9", 1, "#aed6f1"],
+          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
+            0.3, 1, 0.6, 2, 1, 3.5],
+          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
+            0.3, 0.3, 0.6, 0.55, 1, 0.8],
           "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Alert rings
+      // Alert rings — outer warning glow around severe flooding sensors
       map.addLayer({
         id: "device-alert-rings",
         type: "circle",
         source: "device-alerts",
         paint: {
-          "circle-radius": 16,
-          "circle-color": "#b91c1c",
-          "circle-opacity": 0.1,
+          "circle-radius": 20,
+          "circle-color": "#dc2626",
+          "circle-opacity": 0.12,
+          "circle-blur": 0.6,
+        },
+      });
+
+      // Inner alert ring — tighter, brighter
+      map.addLayer({
+        id: "device-alert-rings-inner",
+        type: "circle",
+        source: "device-alerts",
+        paint: {
+          "circle-radius": 12,
+          "circle-color": "#ef4444",
+          "circle-opacity": 0.08,
         },
       });
 

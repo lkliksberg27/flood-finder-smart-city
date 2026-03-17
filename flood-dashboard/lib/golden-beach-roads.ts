@@ -360,12 +360,16 @@ export function calculateFloodFeatures(
       const p0 = [e.a[0] + t0 * (e.b[0] - e.a[0]), e.a[1] + t0 * (e.b[1] - e.a[1])];
       const p1 = [e.a[0] + t1 * (e.b[0] - e.a[0]), e.a[1] + t1 * (e.b[1] - e.a[1])];
       const midDist = e.distA + ((t0 + t1) / 2) * (e.distB - e.distA);
-      const intensity = Math.max(0.2, 1 - (midDist / e.maxDist) * 0.8);
+      // Quadratic falloff: water fades smoothly, bright near sensor, dim at edges
+      const t = Math.min(1, midDist / e.maxDist);
+      const intensity = Math.max(0.12, 1 - t * t);
+      // Normalized depth: 0→shallow, 1→deep (50cm+)
+      const depthNorm = Math.min(1, e.depth / 50);
 
       features.push({
         type: "Feature",
         geometry: { type: "LineString", coordinates: [p0, p1] },
-        properties: { intensity, depth: e.depth },
+        properties: { intensity, depth: e.depth, depthNorm },
       });
     }
   }
