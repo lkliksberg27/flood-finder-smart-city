@@ -82,6 +82,7 @@ function dedupKey(coords: number[][]): string {
 export function queryMapboxRoads(
   map: mapboxgl.Map,
   devices: Device[],
+  depths?: Record<string, number>,
 ): number[][][] {
   const style = map.getStyle();
   if (!style?.sources) return [];
@@ -94,10 +95,22 @@ export function queryMapboxRoads(
   const rawCoords: number[][][] = [];
   const seen = new Set<string>();
 
+  // Only include local streets — exclude highways, bridges, paths, ferry routes
+  const EXCLUDE_CLASSES = new Set([
+    "motorway", "trunk", "primary", "ferry", "path", "pedestrian",
+    "motorway_link", "trunk_link", "primary_link", "aerialway",
+  ]);
+
   for (const sourceId of sourceIds) {
     try {
       const features = map.querySourceFeatures(sourceId, { sourceLayer: "road" });
       for (const f of features) {
+        // Filter out non-street road types
+        const roadClass = (f.properties?.class ?? "") as string;
+        if (EXCLUDE_CLASSES.has(roadClass)) continue;
+        // Skip bridges — water doesn't pool on elevated structures
+        if (f.properties?.structure === "bridge") continue;
+
         if (f.geometry.type === "LineString") {
           const coords = (f.geometry as GeoJSON.LineString).coordinates as number[][];
           if (!coords || coords.length < 2) continue;
@@ -124,13 +137,14 @@ export function queryMapboxRoads(
 
   // console.log(`[flood] queryMapboxRoads: ${rawCoords.length} raw roads`);
 
-  // Keep only roads within 250m of any flooding device
-  const MAX_DIST = 250;
+  // Keep only roads within 100m of a FLOODING device (not all devices)
+  const MAX_ROAD_DIST = 100;
   return rawCoords.filter((road) => {
     for (const d of devices) {
+      if ((depths?.[d.device_id] ?? 0) <= 0) continue; // skip non-flooding
       const dp = [d.lng, d.lat];
       for (let i = 0; i < road.length - 1; i++) {
-        if (ptSegDist(dp, road[i], road[i + 1]) <= MAX_DIST) return true;
+        if (ptSegDist(dp, road[i], road[i + 1]) <= MAX_ROAD_DIST) return true;
       }
     }
     return false;
@@ -168,7 +182,7 @@ export function calculateFloodFeatures(
   // ── Build intersection graph ──
   // Two road endpoints within 15m = same intersection
   // (Mapbox tile boundaries can create gaps between road segment endpoints)
-  const JUNC = 25; // 25m junction merge — catches Mapbox tile boundary gaps
+  const JUNC = 15; // 15m junction merge
   type Adj = { nri: number; myEnd: 0 | 1; nEnd: 0 | 1 };
   const adj: Adj[][] = roads.map(() => []);
   for (let i = 0; i < roads.length; i++) {

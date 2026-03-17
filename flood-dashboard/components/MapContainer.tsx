@@ -356,7 +356,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         // flood refresh
 
         // Query road geometry from Mapbox's vector tiles
-        const roads = queryMapboxRoads(map, currentDevices);
+        const roads = queryMapboxRoads(map, currentDevices, currentDepths);
         if (roads.length > 0) {
           cachedRoadsRef.current = roads;
         }
@@ -494,7 +494,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (roadSrc) {
       const roads = cachedRoadsRef.current.length > 0
         ? cachedRoadsRef.current
-        : queryMapboxRoads(map, devices);
+        : queryMapboxRoads(map, devices, depths);
       if (roads.length > 0) {
         cachedRoadsRef.current = roads;
         const features = calculateFloodFeatures(roads, devices, depths);
