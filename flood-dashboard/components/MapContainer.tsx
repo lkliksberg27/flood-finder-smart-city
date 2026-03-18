@@ -381,21 +381,28 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         const currentDepths = floodDepthsRef.current;
         if (currentDevices.length === 0) return;
 
-        const floodingCount = currentDevices.filter(d => (currentDepths[d.device_id] ?? 0) > 0).length;
-        // flood refresh
-
         // Query road geometry from Mapbox's vector tiles
-        const roads = queryMapboxRoads(map, currentDevices, currentDepths);
-        if (roads.length > 0) {
-          cachedRoadsRef.current = roads;
+        const newRoads = queryMapboxRoads(map, currentDevices, currentDepths);
+
+        // Merge new roads into cache (tiles load progressively)
+        if (newRoads.length > 0) {
+          const existingKeys = new Set(cachedRoadsRef.current.map(r => {
+            const s = r[0], e = r[r.length - 1];
+            return `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
+          }));
+          for (const road of newRoads) {
+            const s = road[0], e = road[road.length - 1];
+            const key = `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
+            if (!existingKeys.has(key)) {
+              cachedRoadsRef.current.push(road);
+              existingKeys.add(key);
+            }
+          }
         }
-        if (cachedRoadsRef.current.length === 0) {
-          // no roads yet
-          return;
-        }
+
+        if (cachedRoadsRef.current.length === 0) return;
 
         const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths, floodConditionsRef.current);
-        // flood features set
         roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) { console.error(`[flood-refresh] error:`, err); }
     };
@@ -409,6 +416,14 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       floodRefreshTimer = setTimeout(refreshFloodFromTiles, 200);
     });
+
+    // Aggressive retry for first 30s — tiles load progressively
+    let floodRetryCount = 0;
+    const floodRetryTimer = setInterval(() => {
+      floodRetryCount++;
+      refreshFloodFromTiles();
+      if (floodRetryCount >= 15) clearInterval(floodRetryTimer); // stop after 30s
+    }, 2000);
 
     // --- Render-loop kick for Next.js dynamic imports ---
     // Mapbox tiles can stall on initial load in Next.js. The base map eventually
@@ -445,6 +460,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     return () => {
       clearInterval(earlyInitTimer);
+      clearInterval(floodRetryTimer);
       clearTimeout(lastResortTimer);
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       map.off("idle", refreshFloodFromTiles);
