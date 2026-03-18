@@ -243,12 +243,12 @@ export function calculateFloodFeatures(
     const snapPt = snapToRoad(sp, roads[snapRi]);
 
     // 2. Compute spread distance from depth + elevation + rainfall + tide
-    let maxDist = 25 + depth * 1.2;                           // base: tight around sensor
-    if (elev < 1.0) maxDist += (1.0 - elev) * 12;            // low elevation: pools a bit more
-    if (rain > 0) maxDist += Math.min(rain * 0.8, 15);       // rainfall: modest boost
-    if (tide > 0.3) maxDist += (tide - 0.3) * 20;            // high tide: modest boost
-    if (rain > 0 && tide > 0.3) maxDist += 8;                // compound event bonus
-    maxDist = Math.min(90, maxDist);
+    let maxDist = 15 + depth * 0.8;                           // base: very tight around sensor
+    if (elev < 1.0) maxDist += (1.0 - elev) * 8;             // low elevation: pools a bit more
+    if (rain > 0) maxDist += Math.min(rain * 0.5, 10);       // rainfall: small boost
+    if (tide > 0.3) maxDist += (tide - 0.3) * 12;            // high tide: small boost
+    if (rain > 0 && tide > 0.3) maxDist += 5;                // compound event bonus
+    maxDist = Math.min(60, maxDist);
 
     // 3. Compute snap offset
     let snapOffset = 0;
