@@ -528,11 +528,14 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
-    // Fit bounds — minZoom 14.5 ensures road tiles load for flood water
+    // Fit to flooding sensors first (zoom 15+ ensures road tiles load for water)
+    // If no floods, fit all devices
     if (devices.length > 0 && map.getZoom() === 15) {
+      const floodingDevices = devices.filter(d => (floodDepths?.[d.device_id] ?? 0) > 0);
+      const toFit = floodingDevices.length > 0 ? floodingDevices : devices;
       const bounds = new mapboxgl.LngLatBounds();
-      devices.forEach((d) => bounds.extend([d.lng, d.lat]));
-      map.fitBounds(bounds, { padding: 60, minZoom: 14.5, maxZoom: 16 });
+      toFit.forEach((d) => bounds.extend([d.lng, d.lat]));
+      map.fitBounds(bounds, { padding: 80, maxZoom: 16 });
     }
 
     // Flood water: use cached roads from idle event, or query now if available
