@@ -242,13 +242,9 @@ export function calculateFloodFeatures(
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
 
-    // 2. Compute spread distance from depth + elevation + rainfall + tide
-    let maxDist = 15 + depth * 0.8;                           // base: very tight around sensor
-    if (elev < 1.0) maxDist += (1.0 - elev) * 8;             // low elevation: pools a bit more
-    if (rain > 0) maxDist += Math.min(rain * 0.5, 10);       // rainfall: small boost
-    if (tide > 0.3) maxDist += (tide - 0.3) * 12;            // high tide: small boost
-    if (rain > 0 && tide > 0.3) maxDist += 5;                // compound event bonus
-    maxDist = Math.min(60, maxDist);
+    // 2. Coverage: deeper water spreads farther along roads
+    // 1cm→54m, 5cm→70m, 10cm→90m, 20cm→130m, 40cm→210m, 50cm→250m
+    const maxDist = Math.min(250, 50 + depth * 4);
 
     // 3. Compute snap offset
     let snapOffset = 0;
@@ -371,26 +367,19 @@ export function calculateFloodFeatures(
     }
   }
 
-  // 6. Subdivide into ~3m pieces for smooth gradient
+  // 6. Subdivide into ~3m pieces for ultra-smooth gradient rendering
   const features: GeoJSON.Feature[] = [];
   for (const [, e] of segBest) {
     const segLen = ptDist(e.a, e.b);
     const n = Math.max(1, Math.ceil(segLen / 3));
-
-    // Low-spot intensity boost: estimate elevation at segment midpoint
-    const mid = [(e.a[0] + e.b[0]) / 2, (e.a[1] + e.b[1]) / 2];
-    const midElev = estimateElevation(mid, devices);
-    const elevBoost = midElev < 0.8 ? Math.min(0.25, (0.8 - midElev) * 0.5) : 0;
-
     for (let p = 0; p < n; p++) {
       const t0 = p / n, t1 = (p + 1) / n;
       const p0 = [e.a[0] + t0 * (e.b[0] - e.a[0]), e.a[1] + t0 * (e.b[1] - e.a[1])];
       const p1 = [e.a[0] + t1 * (e.b[0] - e.a[0]), e.a[1] + t1 * (e.b[1] - e.a[1])];
       const midDist = e.distA + ((t0 + t1) / 2) * (e.distB - e.distA);
-
+      // Smooth cubic falloff: bright center, gentle fade, near-invisible edges
       const t = Math.min(1, midDist / e.maxDist);
-      const baseIntensity = (1 - t) * (1 - t * t);
-      const intensity = Math.max(0.04, Math.min(1, baseIntensity + elevBoost));
+      const intensity = Math.max(0.04, (1 - t) * (1 - t * t));
       const depthNorm = Math.min(1, e.depth / 50);
 
       features.push({
