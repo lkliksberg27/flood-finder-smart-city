@@ -96,7 +96,7 @@ tr {
   transition: background-color 0.15s ease;
 }
 
-/* Scrollbar */
+/* Scrollbar — Chrome/Safari */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -109,6 +109,11 @@ tr {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #4b5563;
+}
+/* Scrollbar — Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #374151 var(--bg-primary);
 }
 
 /* Timeline slider */

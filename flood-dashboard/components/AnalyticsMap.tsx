@@ -307,7 +307,7 @@ export function AnalyticsMap({ devices, events, floodCounts, selectedArea, onAre
       deviceStats[id].count++;
       deviceStats[id].totalDepth += e.peak_depth_cm;
       deviceStats[id].maxDepth = Math.max(deviceStats[id].maxDepth, e.peak_depth_cm);
-      if ((e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3) deviceStats[id].compound++;
+      if ((e.rainfall_mm ?? 0) >= 2 && (e.tide_level_m ?? 0) > 0.3) deviceStats[id].compound++;
     });
 
     // Dot features

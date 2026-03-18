@@ -281,7 +281,7 @@ async function runAIAnalysis() {
       p.totalDurationMin += e.duration_minutes || 0;
       if (e.rainfall_mm > 0) { p.rainfallEvents++; p.avgRainfallMm += e.rainfall_mm; }
       if (e.tide_level_m > 0.3) { p.tidalEvents++; p.avgTideLevelM += e.tide_level_m; }
-      if (e.rainfall_mm > 0 && e.tide_level_m > 0.3) p.compoundEvents++;
+      if (e.rainfall_mm >= 2 && e.tide_level_m > 0.3) p.compoundEvents++;
 
       const hour = new Date(e.started_at).getHours();
       if (hour >= 6 && hour < 12) p.timeOfDayDistribution.morning++;
@@ -374,7 +374,7 @@ async function runAIAnalysis() {
     const weather = await getWeatherConditions(25.9565, -80.1392);
 
     // ── 7. Build comprehensive AI prompt ────────────────────
-    const compoundCount = events.filter((e) => e.rainfall_mm > 0 && e.tide_level_m > 0.3).length;
+    const compoundCount = events.filter((e) => e.rainfall_mm >= 2 && e.tide_level_m > 0.3).length;
 
     const anthropic = new Anthropic();
 

@@ -155,34 +155,36 @@ function SensorsContent() {
         </button>
       </div>
 
-      {/* Fleet summary */}
+      {/* Fleet summary — reflects current filters */}
       {devices.length > 0 && (
         <div className="grid grid-cols-5 gap-4 mb-6">
           <div className="bg-bg-card border border-border-card rounded-lg p-4">
             <p className="text-xs text-text-secondary uppercase">Total Sensors</p>
-            <p className="text-2xl font-bold mt-1">{devices.length}</p>
+            <p className="text-2xl font-bold mt-1">{filtered.length}</p>
           </div>
           <div className="bg-bg-card border border-border-card rounded-lg p-4">
             <p className="text-xs text-text-secondary uppercase">Online</p>
             <p className="text-2xl font-bold text-status-green mt-1">
-              {devices.filter((d) => d.status === "online").length}
+              {filtered.filter((d) => d.status === "online").length}
             </p>
           </div>
           <div className="bg-bg-card border border-border-card rounded-lg p-4">
             <p className="text-xs text-text-secondary uppercase">Alerting</p>
             <p className="text-2xl font-bold text-status-red mt-1">
-              {devices.filter((d) => d.status === "alert").length}
+              {filtered.filter((d) => d.status === "alert").length}
             </p>
           </div>
           <div className="bg-bg-card border border-border-card rounded-lg p-4">
             <p className="text-xs text-text-secondary uppercase">Low Battery</p>
             <p className="text-2xl font-bold text-status-amber mt-1">
-              {devices.filter((d) => (d.battery_v ?? 4) < 3.3).length}
+              {filtered.filter((d) => (d.battery_v ?? 4) < 3.3).length}
             </p>
           </div>
           <div className="bg-bg-card border border-border-card rounded-lg p-4">
             <p className="text-xs text-text-secondary uppercase">Neighborhoods</p>
-            <p className="text-2xl font-bold text-status-blue mt-1">{neighborhoods.length}</p>
+            <p className="text-2xl font-bold text-status-blue mt-1">
+              {new Set(filtered.map((d) => d.neighborhood).filter(Boolean)).size}
+            </p>
           </div>
         </div>
       )}

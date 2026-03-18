@@ -133,13 +133,21 @@ function OverviewContent() {
   }, [fetchData]);
 
   // Fetch weather
+  const [weatherError, setWeatherError] = useState(false);
   useEffect(() => {
     async function loadWeather() {
       try {
         const res = await fetch("/api/weather");
-        if (res.ok) setWeather(await res.json());
-      } catch {
-        // weather is optional
+        if (res.ok) {
+          setWeather(await res.json());
+          setWeatherError(false);
+        } else {
+          console.warn("[Weather] API returned", res.status);
+          setWeatherError(true);
+        }
+      } catch (err) {
+        console.warn("[Weather] Fetch failed:", err);
+        setWeatherError(true);
       }
     }
     loadWeather();

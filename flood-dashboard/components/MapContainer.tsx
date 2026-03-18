@@ -106,7 +106,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         html += `<span style="font-size:10px;color:#9ca3af">Recent Floods (${events.length})</span>`;
         events.slice(0, 3).forEach((e) => {
           const date = new Date(e.started_at).toLocaleDateString();
-          const compound = (e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3;
+          const compound = (e.rainfall_mm ?? 0) >= 2 && (e.tide_level_m ?? 0) > 0.3;
           html += `<div style="font-size:11px;margin-top:3px;display:flex;justify-content:space-between">
             <span style="color:#d1d5db">${date}</span>
             <span>

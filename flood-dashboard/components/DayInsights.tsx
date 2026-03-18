@@ -72,7 +72,7 @@ export function DayInsights({ dayStart, dayEnd, events }: Props) {
   const pieData = useMemo(() => {
     let rainOnly = 0, tideOnly = 0, compound = 0, dry = 0;
     for (const evt of events) {
-      const hasRain = (evt.rainfall_mm ?? 0) > 0;
+      const hasRain = (evt.rainfall_mm ?? 0) >= 2;
       const hasTide = (evt.tide_level_m ?? 0) > 0.3;
       if (hasRain && hasTide) compound++;
       else if (hasRain) rainOnly++;

@@ -49,7 +49,7 @@ export function OverallTrends({ events, neighborhood }: Props) {
       if (!map[n]) map[n] = { events: 0, avgDepth: 0, compound: 0 };
       map[n].events++;
       map[n].avgDepth += e.peak_depth_cm;
-      if ((e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3) map[n].compound++;
+      if ((e.rainfall_mm ?? 0) >= 2 && (e.tide_level_m ?? 0) > 0.3) map[n].compound++;
     }
     return Object.entries(map)
       .map(([name, v]) => ({

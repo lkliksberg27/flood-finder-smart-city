@@ -224,7 +224,7 @@ export async function POST(request: Request) {
         p.tidalEvents++;
         p.avgTideLevelM += e.tide_level_m;
       }
-      if ((e.rainfall_mm ?? 0) > 0 && (e.tide_level_m ?? 0) > 0.3) {
+      if ((e.rainfall_mm ?? 0) >= 2 && (e.tide_level_m ?? 0) > 0.3) {
         p.compoundEvents++;
       }
 
