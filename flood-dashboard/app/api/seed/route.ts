@@ -67,7 +67,7 @@ export async function POST() {
         altitude_baro: s.altBaro,
         mailbox_height_cm: 95,
         baseline_distance_cm: baselineCm,
-        status: s.altBaro < 0.6 ? "alert" : i < 19 ? "online" : "offline" as const,
+        status: (i < 19 ? "online" : "offline") as "online" | "offline" | "alert",
         battery_v: parseFloat(randomBetween(3.0, 4.2).toFixed(2)),
         last_seen: i < 19
           ? new Date(Date.now() - Math.random() * 600000).toISOString()
@@ -77,10 +77,6 @@ export async function POST() {
       };
     });
 
-    for (const dev of devices) {
-      await supabase.from("devices").upsert(dev, { onConflict: "device_id" });
-    }
-
     // ── 2. Seed flood events — biased toward low-elevation sensors ──
     const floodEvents = [];
 
@@ -88,6 +84,17 @@ export async function POST() {
     const lowestSensors = [...devices]
       .sort((a, b) => (a.altitude_baro - a.baseline_distance_cm / 100) - (b.altitude_baro - b.baseline_distance_cm / 100))
       .slice(0, 6);
+
+    // Mark flooding devices as "alert"
+    const floodingIds = new Set(lowestSensors.map(d => d.device_id));
+    devices.forEach(d => {
+      if (floodingIds.has(d.device_id)) d.status = "alert";
+    });
+
+    for (const dev of devices) {
+      await supabase.from("devices").upsert(dev, { onConflict: "device_id" });
+    }
+
     for (const dev of lowestSensors) {
       const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
       const elevFactor = Math.max(0.3, 1 - (streetElev + 0.7));

@@ -231,9 +231,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         type: "circle",
         source: "device-alerts",
         paint: {
-          "circle-radius": 20,
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 14, 15, 22, 18, 30],
           "circle-color": "#dc2626",
-          "circle-opacity": 0.12,
+          "circle-opacity": 0.15,
           "circle-blur": 0.6,
         },
       });
@@ -244,9 +244,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         type: "circle",
         source: "device-alerts",
         paint: {
-          "circle-radius": 12,
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 8, 15, 14, 18, 20],
           "circle-color": "#ef4444",
-          "circle-opacity": 0.08,
+          "circle-opacity": 0.1,
         },
       });
 
@@ -256,10 +256,23 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         type: "circle",
         source: "device-dots",
         paint: {
-          "circle-radius": ["case",
-            ["==", ["get", "highlighted"], true], 9,
-            ["==", ["get", "status"], "alert"], 7,
-            5
+          "circle-radius": [
+            "interpolate", ["linear"], ["zoom"],
+            12, ["case",
+              ["==", ["get", "highlighted"], true], 7,
+              ["==", ["get", "status"], "alert"], 6,
+              4
+            ],
+            15, ["case",
+              ["==", ["get", "highlighted"], true], 10,
+              ["==", ["get", "status"], "alert"], 8,
+              5
+            ],
+            18, ["case",
+              ["==", ["get", "highlighted"], true], 14,
+              ["==", ["get", "status"], "alert"], 11,
+              7
+            ]
           ],
           "circle-color": ["get", "color"],
           "circle-stroke-width": ["case",
