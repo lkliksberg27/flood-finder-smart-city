@@ -225,6 +225,8 @@ export function calculateFloodFeatures(
     a: number[]; b: number[];
   }>();
 
+  const snappedDevices = new Set<string>();
+
   for (const device of flooding) {
     const sp = [device.lng, device.lat];
     const depth = depths[device.device_id] ?? 0;
@@ -239,6 +241,7 @@ export function calculateFloodFeatures(
       }
     }
     if (snapRi < 0 || snapBest > 90) continue;
+    snappedDevices.add(device.device_id);
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
 
@@ -362,6 +365,43 @@ export function calculateFloodFeatures(
         const ex = segBest.get(key);
         if (!ex || avgDist < (ex.distA + ex.distB) / 2) {
           segBest.set(key, { distA: rdA, distB: rdB, depth, maxDist, a: rA, b: rB });
+        }
+      }
+    }
+  }
+
+  // 5b. Fallback: sensors that couldn't snap to any road tile still need water
+  // Generate a cross pattern of synthetic road-like lines around the sensor
+  for (const device of flooding) {
+    if (snappedDevices.has(device.device_id)) continue;
+    const depth = depths[device.device_id] ?? 0;
+    const maxDist = Math.min(250, 50 + depth * 4);
+    const lng = device.lng;
+    const lat = device.lat;
+    const mToLng = 1 / (111320 * cosLat(lat));
+    const mToLat = 1 / 111320;
+
+    // 8 radial lines (N, NE, E, SE, S, SW, W, NW)
+    const angles = [0, 45, 90, 135, 180, 225, 270, 315];
+    for (const angle of angles) {
+      const rad = (angle * Math.PI) / 180;
+      const dx = Math.sin(rad) * mToLng;
+      const dy = Math.cos(rad) * mToLat;
+      // Create a line from sensor out to maxDist
+      const steps = Math.ceil(maxDist / 5);
+      for (let s = 0; s < steps; s++) {
+        const d0 = (s / steps) * maxDist;
+        const d1 = ((s + 1) / steps) * maxDist;
+        const a = [lng + dx * d0, lat + dy * d0];
+        const b = [lng + dx * d1, lat + dy * d1];
+        const midDist = (d0 + d1) / 2;
+        const t = Math.min(1, midDist / maxDist);
+        const intensity = Math.max(0.04, (1 - t) * (1 - t * t));
+        const depthNorm = Math.min(1, depth / 50);
+        const key = `fallback|${device.device_id}|${angle}|${s}`;
+        if (!segBest.has(key)) {
+          // Push directly to features later — store temporarily
+          segBest.set(key, { distA: d0, distB: d1, depth, maxDist, a, b });
         }
       }
     }

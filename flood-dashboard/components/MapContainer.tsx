@@ -528,11 +528,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
-    // Fit bounds
+    // Fit bounds — minZoom 14.5 ensures road tiles load for flood water
     if (devices.length > 0 && map.getZoom() === 15) {
       const bounds = new mapboxgl.LngLatBounds();
       devices.forEach((d) => bounds.extend([d.lng, d.lat]));
-      map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+      map.fitBounds(bounds, { padding: 60, minZoom: 14.5, maxZoom: 16 });
     }
 
     // Flood water: use cached roads from idle event, or query now if available
