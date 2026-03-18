@@ -99,12 +99,9 @@ function buildPayload(dev) {
     deviceId: dev.deviceId,
     lat: dev.lat,
     lng: dev.lng,
-    altitudeGPS: dev.altitudeGPS,
-    altitudeBaro: dev.altitudeBaro,
     distanceCm,
     waterDetected: (dev.mailboxHeightCm - distanceCm) > 5,
     batteryV: parseFloat(dev.battery.toFixed(2)),
-    rssi: -50 - Math.floor(Math.random() * 40),
     timestamp: Math.floor(Date.now() / 1000),
   };
 }

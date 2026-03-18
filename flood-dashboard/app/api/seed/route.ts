@@ -167,14 +167,10 @@ export async function POST() {
           device_id: dev.device_id,
           lat: dev.lat,
           lng: dev.lng,
-          altitude_gps: dev.altitude_baro + randomBetween(-0.5, 0.5),
-          altitude_baro: dev.altitude_baro,
           distance_cm: distanceCm,
           water_detected: floodDepth > 0,
           flood_depth_cm: floodDepth,
           battery_v: dev.battery_v,
-          rssi: Math.floor(randomBetween(-90, -50)),
-          is_valid: true,
           recorded_at: recordedAt.toISOString(),
         });
       }

@@ -64,14 +64,10 @@ async function handleMessage(topic, payload) {
     device_id: data.deviceId,
     lat: data.lat,
     lng: data.lng,
-    altitude_gps: data.altitudeGPS,
-    altitude_baro: data.altitudeBaro,
     distance_cm: data.distanceCm,
     water_detected: waterDetected,
     flood_depth_cm: floodDepth,
     battery_v: data.batteryV,
-    rssi: data.rssi,
-    is_valid: valid,
     recorded_at: new Date(data.timestamp * 1000).toISOString(),
   });
   if (readErr) console.error('[DB] Insert reading error:', readErr.message);

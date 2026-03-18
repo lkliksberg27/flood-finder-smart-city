@@ -19,14 +19,10 @@ export interface SensorReading {
   device_id: string;
   lat: number | null;
   lng: number | null;
-  altitude_gps: number | null;
-  altitude_baro: number | null;
   distance_cm: number | null;
   water_detected: boolean;
   flood_depth_cm: number;
   battery_v: number | null;
-  rssi: number | null;
-  is_valid: boolean;
   recorded_at: string;
 }
 

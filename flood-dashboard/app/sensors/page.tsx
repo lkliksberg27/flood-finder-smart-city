@@ -333,12 +333,11 @@ function SensorsContent() {
                     <div className="flex gap-6">
                       <div className="flex-1">
                         <p className="text-xs text-text-secondary mb-2">Last 10 Readings</p>
-                        <div className="grid grid-cols-5 gap-2 text-xs font-mono">
+                        <div className="grid grid-cols-4 gap-2 text-xs font-mono">
                           <span className="text-text-secondary">Time</span>
                           <span className="text-text-secondary">Distance</span>
                           <span className="text-text-secondary">Flood Depth</span>
                           <span className="text-text-secondary">Battery</span>
-                          <span className="text-text-secondary">RSSI</span>
                           {expandedReadings.map((r) => [
                             <span key={`${r.id}-t`}>{new Date(r.recorded_at).toLocaleTimeString()}</span>,
                             <span key={`${r.id}-d`}>{r.distance_cm}cm</span>,
@@ -346,7 +345,6 @@ function SensorsContent() {
                               {r.flood_depth_cm}cm
                             </span>,
                             <span key={`${r.id}-b`}>{r.battery_v?.toFixed(1)}V</span>,
-                            <span key={`${r.id}-r`}>{r.rssi}dBm</span>,
                           ])}
                         </div>
                       </div>
