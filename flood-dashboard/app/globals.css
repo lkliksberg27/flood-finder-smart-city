@@ -96,6 +96,22 @@ tr {
   transition: background-color 0.15s ease;
 }
 
+/* Mapbox popup — dark theme override */
+.mapboxgl-popup-content {
+  background: transparent !important;
+  padding: 0 !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+  border-radius: 8px !important;
+}
+.mapboxgl-popup-tip {
+  border-top-color: #111827 !important;
+  border-bottom-color: #111827 !important;
+}
+.mapboxgl-popup-close-button {
+  color: #9ca3af !important;
+  font-size: 18px !important;
+}
+
 /* Scrollbar — Chrome/Safari */
 ::-webkit-scrollbar {
   width: 6px;

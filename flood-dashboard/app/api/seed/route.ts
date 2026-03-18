@@ -80,10 +80,10 @@ export async function POST() {
     // ── 2. Seed flood events — biased toward low-elevation sensors ──
     const floodEvents = [];
 
-    // Active floods on lowest-elevation sensors
+    // Active floods on lowest-elevation sensors (12 of 20 — realistic storm scenario)
     const lowestSensors = [...devices]
       .sort((a, b) => (a.altitude_baro - a.baseline_distance_cm / 100) - (b.altitude_baro - b.baseline_distance_cm / 100))
-      .slice(0, 6);
+      .slice(0, 12);
 
     // Mark flooding devices as "alert"
     const floodingIds = new Set(lowestSensors.map(d => d.device_id));

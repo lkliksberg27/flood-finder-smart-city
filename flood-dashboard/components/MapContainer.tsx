@@ -309,38 +309,38 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           : "—";
 
         const popupHTML = `
-          <div style="font-family:'DM Sans',sans-serif;min-width:220px">
+          <div style="font-family:'DM Sans',sans-serif;min-width:220px;background:#111827;color:#e5e7eb;padding:12px;border-radius:8px;border:1px solid #1f2937">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <strong style="font-size:14px">${props.device_id}</strong>
+              <strong style="font-size:14px;color:#f9fafb">${props.device_id}</strong>
               <span style="font-size:10px;color:${color};background:${color}22;padding:1px 6px;border-radius:4px;font-weight:600">${(props.status || "").toUpperCase()}</span>
             </div>
             ${props.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${props.name}</div>` : ""}
-            <hr style="border-color:#1f2937;margin:8px 0"/>
+            <hr style="border-color:#374151;margin:8px 0"/>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
               <div>
-                <span style="color:#6b7280">Street Elev.</span><br/>
-                <span style="font-weight:600">${streetElev}m</span>
+                <span style="color:#9ca3af">Street Elev.</span><br/>
+                <span style="font-weight:600;color:#f3f4f6">${streetElev}m</span>
               </div>
               <div>
-                <span style="color:#6b7280">Last Seen</span><br/>
-                <span style="font-weight:600">${lastSeenText}</span>
+                <span style="color:#9ca3af">Last Seen</span><br/>
+                <span style="font-weight:600;color:#f3f4f6">${lastSeenText}</span>
               </div>
               <div>
-                <span style="color:#6b7280">Battery</span><br/>
+                <span style="color:#9ca3af">Battery</span><br/>
                 <div style="display:flex;align-items:center;gap:4px;margin-top:2px">
-                  <div style="flex:1;height:4px;background:#1f2937;border-radius:2px;overflow:hidden">
+                  <div style="flex:1;height:4px;background:#374151;border-radius:2px;overflow:hidden">
                     <div style="width:${battPct}%;height:100%;background:${battColor};border-radius:2px"></div>
                   </div>
-                  <span style="font-size:10px;font-weight:600">${Number(battV).toFixed(1)}V</span>
+                  <span style="font-size:10px;font-weight:600;color:#f3f4f6">${Number(battV).toFixed(1)}V</span>
                 </div>
               </div>
               ${props.neighborhood ? `<div>
-                <span style="color:#6b7280">Area</span><br/>
-                <span style="font-weight:600">${props.neighborhood}</span>
+                <span style="color:#9ca3af">Area</span><br/>
+                <span style="font-weight:600;color:#f3f4f6">${props.neighborhood}</span>
               </div>` : ""}
             </div>
             <div data-popup-data="${props.device_id}" style="margin-top:4px">
-              <div style="font-size:10px;color:#6b7280;margin-top:6px;display:flex;align-items:center;gap:4px">
+              <div style="font-size:10px;color:#9ca3af;margin-top:6px;display:flex;align-items:center;gap:4px">
                 <div style="width:12px;height:12px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>
                 Loading data...
               </div>
