@@ -528,14 +528,22 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
-    // Fit to flooding sensors first (zoom 15+ ensures road tiles load for water)
-    // If no floods, fit all devices
-    if (devices.length > 0 && map.getZoom() === 15) {
+    // Center on flooding sensors at zoom 15+ (road tiles load at this level)
+    // Only auto-center once on initial load
+    const dotSource = map.getSource("device-dots") as (mapboxgl.GeoJSONSource & { _hasAutoFit?: boolean }) | undefined;
+    if (devices.length > 0 && dotSource && !dotSource._hasAutoFit) {
       const floodingDevices = devices.filter(d => (floodDepths?.[d.device_id] ?? 0) > 0);
-      const toFit = floodingDevices.length > 0 ? floodingDevices : devices;
-      const bounds = new mapboxgl.LngLatBounds();
-      toFit.forEach((d) => bounds.extend([d.lng, d.lat]));
-      map.fitBounds(bounds, { padding: 80, maxZoom: 16 });
+      if (floodingDevices.length > 0) {
+        // Center on flood zone centroid
+        const avgLng = floodingDevices.reduce((s, d) => s + d.lng, 0) / floodingDevices.length;
+        const avgLat = floodingDevices.reduce((s, d) => s + d.lat, 0) / floodingDevices.length;
+        map.jumpTo({ center: [avgLng, avgLat], zoom: 15.2 });
+      } else {
+        const bounds = new mapboxgl.LngLatBounds();
+        devices.forEach((d) => bounds.extend([d.lng, d.lat]));
+        map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+      }
+      dotSource._hasAutoFit = true;
     }
 
     // Flood water: use cached roads from idle event, or query now if available
