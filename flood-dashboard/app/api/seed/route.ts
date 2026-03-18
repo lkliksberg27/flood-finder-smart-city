@@ -96,9 +96,9 @@ export async function POST() {
     }
 
     for (const dev of lowestSensors) {
-      const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
-      const elevFactor = Math.max(0.3, 1 - (streetElev + 0.7));
-      const peakDepth = Math.floor(randomBetween(8, 30) * elevFactor + 5);
+      // All active floods should have substantial depth (15-40cm)
+      // so water visualization is consistently visible on every sensor
+      const peakDepth = Math.floor(randomBetween(15, 40));
       floodEvents.push({
         device_id: dev.device_id,
         started_at: new Date(Date.now() - Math.floor(randomBetween(10, 90)) * 60000).toISOString(),
