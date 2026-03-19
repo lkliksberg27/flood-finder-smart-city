@@ -96,16 +96,28 @@ export async function POST() {
     }
 
     for (const dev of lowestSensors) {
-      // All active floods should have substantial depth (15-40cm)
-      // so water visualization is consistently visible on every sensor
-      const peakDepth = Math.floor(randomBetween(15, 40));
+      const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
+      // Rainfall and tide — random but realistic
+      const rainfall = parseFloat(randomBetween(5, 35).toFixed(1));
+      const tide = parseFloat(randomBetween(0.15, 0.55).toFixed(2));
+
+      // Depth correlates with conditions:
+      // Lower elevation = deeper flooding (water pools in low spots)
+      // More rain = deeper (more runoff)
+      // Higher tide = deeper (drainage blocked)
+      let peakDepth = 10; // base
+      peakDepth += Math.max(0, (0.5 - streetElev) * 25);  // low elev boost (FF-011 at -0.65 gets +29cm)
+      peakDepth += rainfall * 0.4;                          // rain contribution
+      peakDepth += Math.max(0, (tide - 0.2) * 20);         // tide contribution
+      peakDepth = Math.floor(Math.min(55, Math.max(12, peakDepth)));
+
       floodEvents.push({
         device_id: dev.device_id,
         started_at: new Date(Date.now() - Math.floor(randomBetween(10, 90)) * 60000).toISOString(),
-        ended_at: null, // ACTIVE — not ended yet
+        ended_at: null,
         peak_depth_cm: peakDepth,
-        rainfall_mm: parseFloat(randomBetween(8, 35).toFixed(1)),
-        tide_level_m: parseFloat(randomBetween(0.2, 0.55).toFixed(2)),
+        rainfall_mm: rainfall,
+        tide_level_m: tide,
       });
     }
 
