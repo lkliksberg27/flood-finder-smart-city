@@ -162,13 +162,16 @@ export function calculateFloodFeatures(
   roads: number[][][],
   devices: Device[],
   depths: Record<string, number>,
-  _conditions?: FloodConditions,
+  conditions?: FloodConditions,
 ): GeoJSON.Feature[] {
+  const streetElev = (d: Device) => (d.altitude_baro ?? 1) - (d.baseline_distance_cm ?? 0) / 100;
   const flooding = devices
     .filter((d) => (depths[d.device_id] ?? 0) > 0)
-    .map((d) => ({ lng: d.lng, lat: d.lat, depth: depths[d.device_id] ?? 0 }));
-  // Removed verbose logging for production performance
+    .map((d) => ({ lng: d.lng, lat: d.lat, depth: depths[d.device_id] ?? 0, elev: streetElev(d) }));
   if (flooding.length === 0 || roads.length === 0) return [];
+
+  const rain = conditions?.rainfallMm ?? 0;
+  const tide = conditions?.tideLevelM ?? 0;
 
   // ── Pre-compute cumulative distance along each road ──
   const cumDist: number[][] = roads.map((road) => {
@@ -220,10 +223,19 @@ export function calculateFloodFeatures(
     if (snapRi < 0 || snapBest > 90) continue; // 90m snap radius — mailbox sensors can be far from road centerline
 
     const snapPt = snapToRoad(sp, roads[snapRi]);
-    // Coverage: deeper water spreads farther along roads
-    // 1cm→54m, 5cm→70m, 10cm→90m, 20cm→130m, 40cm→210m, 50cm→250m
-    const maxDist = Math.min(250, 50 + sensor.depth * 4);
-    // sensor snapped
+
+    // Coverage: all factors determine how far water spreads along roads
+    // Base: depth drives primary spread (deeper = farther)
+    let maxDist = 50 + sensor.depth * 4;
+    // Elevation: low-lying areas pool water — spreads further
+    if (sensor.elev < 1.0) maxDist += (1.0 - sensor.elev) * 20;
+    // Rainfall: more rain = more runoff on roads
+    if (rain > 2) maxDist += Math.min(rain * 0.8, 25);
+    // Tide: high tide blocks drainage, water backs up
+    if (tide > 0.3) maxDist += (tide - 0.3) * 30;
+    // Compound: rain + high tide = worst case, drains can't empty
+    if (rain > 2 && tide > 0.3) maxDist += 15;
+    maxDist = Math.min(300, maxDist);
 
     // 2. Compute snapOffset = along-road distance from road-start to snap point
     let snapOffset = 0;
