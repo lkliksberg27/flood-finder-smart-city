@@ -192,19 +192,18 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Layer 1: Ambient glow — depth-colored, wide blur
+      // Layer 1: Subtle ambient glow
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": ["interpolate", ["linear"], ["get", "depthNorm"],
-            0, "#2980b9", 0.4, "#3498db", 1, "#5dade2"],
+          "line-color": "#1a5276",
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 6, 0.2, 14, 0.5, 22, 1, 30],
+            0.04, 4, 0.2, 8, 0.5, 13, 1, 18],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 0.04, 0.2, 0.12, 0.5, 0.22, 1, 0.38],
-          "line-blur": 10,
+            0.04, 0.02, 0.2, 0.06, 0.5, 0.1, 1, 0.18],
+          "line-blur": 6,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });

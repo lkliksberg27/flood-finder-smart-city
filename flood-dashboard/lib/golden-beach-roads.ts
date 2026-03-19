@@ -97,17 +97,15 @@ export function queryMapboxRoads(
   const rawCoords: number[][][] = [];
   const seen = new Set<string>();
 
-  const EXCLUDE_CLASSES = new Set([
-    "motorway", "trunk", "ferry", "path", "pedestrian",
-    "motorway_link", "trunk_link", "aerialway",
-  ]);
+  // Only skip non-drivable features — snap to ANY road or street
+  const SKIP = new Set(["ferry", "aerialway", "path", "pedestrian"]);
 
   for (const sourceId of sourceIds) {
     try {
       const features = map.querySourceFeatures(sourceId, { sourceLayer: "road" });
       for (const f of features) {
         const roadClass = (f.properties?.class ?? "") as string;
-        if (EXCLUDE_CLASSES.has(roadClass)) continue;
+        if (SKIP.has(roadClass)) continue;
         if (f.properties?.structure === "bridge") continue;
 
         if (f.geometry.type === "LineString") {
