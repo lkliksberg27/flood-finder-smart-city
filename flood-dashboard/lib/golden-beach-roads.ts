@@ -97,16 +97,18 @@ export function queryMapboxRoads(
   const rawCoords: number[][][] = [];
   const seen = new Set<string>();
 
-  // Exclude non-road features
-  const SKIP = new Set(["ferry", "aerialway"]);
+  const EXCLUDE_CLASSES = new Set([
+    "motorway", "trunk", "ferry", "path", "pedestrian",
+    "motorway_link", "trunk_link", "aerialway",
+  ]);
 
   for (const sourceId of sourceIds) {
     try {
       const features = map.querySourceFeatures(sourceId, { sourceLayer: "road" });
       for (const f of features) {
         const roadClass = (f.properties?.class ?? "") as string;
-        if (SKIP.has(roadClass)) continue;
-        if (f.properties?.structure === "tunnel") continue;
+        if (EXCLUDE_CLASSES.has(roadClass)) continue;
+        if (f.properties?.structure === "bridge") continue;
 
         if (f.geometry.type === "LineString") {
           const coords = (f.geometry as GeoJSON.LineString).coordinates as number[][];

@@ -192,52 +192,54 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Layer 1: Wide ambient glow — "water reflecting light"
+      // Layer 1: Ambient glow — depth-colored, wide blur
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#1a6b9c",
+          "line-color": ["interpolate", ["linear"], ["get", "depthNorm"],
+            0, "#2980b9", 0.4, "#3498db", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.05, 16, 0.3, 24, 0.6, 32, 1, 40],
+            0.04, 6, 0.2, 14, 0.5, 22, 1, 30],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.05, 0.04, 0.2, 0.08, 0.5, 0.14, 1, 0.22],
-          "line-blur": 8,
+            0.04, 0.04, 0.2, 0.12, 0.5, 0.22, 1, 0.38],
+          "line-blur": 10,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Layer 2: Road surface water — wide, semi-transparent, natural color
-      map.addLayer({
-        id: "flood-road-surface",
-        type: "line",
-        source: "flood-roads",
-        paint: {
-          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.05, "#0e3d5c", 0.3, "#145a82", 0.6, "#1a6fa0", 1, "#2196c8"],
-          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.05, 6, 0.2, 10, 0.5, 14, 1, 18],
-          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.05, 0.25, 0.2, 0.45, 0.5, 0.6, 1, 0.75],
-          "line-blur": 1.5,
-        },
-        layout: { "line-cap": "round", "line-join": "round" },
-      });
-
-      // Layer 3: Bright center line — visible water flow
+      // Layer 2: Main water body — the visible flood on the road
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1a6b9c", 0.4, "#2196c8", 0.7, "#42a5d6", 1, "#64b5e4"],
+            0.04, "#154360", 0.15, "#1a5276", 0.35, "#2471a3",
+            0.6, "#2e86c1", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 2, 0.3, 3.5, 0.6, 5, 1, 7],
+            0.04, 1.5, 0.15, 3, 0.35, 5.5, 0.6, 8, 1, 11],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.5, 0.3, 0.7, 0.6, 0.85, 1, 0.95],
-          "line-blur": 0,
+            0.04, 0.2, 0.15, 0.5, 0.35, 0.72, 0.6, 0.88, 1, 0.96],
+          "line-blur": 0.8,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      // Layer 3: Specular core — soft highlight for surface reflection
+      map.addLayer({
+        id: "flood-road-core",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
+            0.4, "#85c1e9", 0.7, "#aed6f1", 1, "#d4e6f1"],
+          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
+            0.4, 0.8, 0.7, 1.5, 1, 2.5],
+          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
+            0.4, 0.15, 0.7, 0.35, 1, 0.55],
+          "line-blur": 0.3,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
