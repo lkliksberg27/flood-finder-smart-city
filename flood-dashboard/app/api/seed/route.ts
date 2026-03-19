@@ -24,9 +24,9 @@ const SENSOR_GRID = [
   { id: "FF-006", name: "Ocean Blvd @ S Parkway",       lat: 25.96500, lng: -80.11962, altBaro: 1.40, hood: "Central Golden Beach" },
   { id: "FF-007", name: "Ocean Blvd @ Ravenna Ave",     lat: 25.96330, lng: -80.11965, altBaro: 1.15, hood: "South Golden Beach" },
   { id: "FF-008", name: "Ocean Blvd @ Verona Ave",      lat: 25.96020, lng: -80.11970, altBaro: 0.90, hood: "South Golden Beach" },
-  { id: "FF-009", name: "Ocean Blvd @ S Island Rd",     lat: 25.95870, lng: -80.11975, altBaro: 0.65, hood: "South Golden Beach" },
-  { id: "FF-010", name: "Ocean Blvd @ Terracina Ave",   lat: 25.95710, lng: -80.11978, altBaro: 0.45, hood: "South Golden Beach" },
-  { id: "FF-011", name: "Ocean Blvd @ 194th Ln",        lat: 25.95600, lng: -80.11980, altBaro: 0.30, hood: "South Golden Beach" },
+  { id: "FF-009", name: "Ocean Blvd @ S Island Rd",     lat: 25.95900, lng: -80.11972, altBaro: 0.65, hood: "South Golden Beach" },
+  { id: "FF-010", name: "Ocean Blvd @ Terracina Ave",   lat: 25.95710, lng: -80.11972, altBaro: 0.45, hood: "South Golden Beach" },
+  { id: "FF-011", name: "Ocean Blvd @ 194th Ln",        lat: 25.95610, lng: -80.11972, altBaro: 0.30, hood: "South Golden Beach" },
 
   // ── Golden Beach Dr (parallel N-S road, centerline ~lng -80.12090) ──
   { id: "FF-012", name: "Golden Beach Dr @ Centre Is",     lat: 25.96630, lng: -80.12090, altBaro: 1.50, hood: "Central Golden Beach" },
