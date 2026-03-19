@@ -24,20 +24,20 @@ const SENSOR_GRID = [
   { id: "FF-006", name: "Ocean Blvd @ S Parkway",       lat: 25.96500, lng: -80.11962, altBaro: 1.40, hood: "Central Golden Beach" },
   { id: "FF-007", name: "Ocean Blvd @ Ravenna Ave",     lat: 25.96330, lng: -80.11965, altBaro: 1.15, hood: "South Golden Beach" },
   { id: "FF-008", name: "Ocean Blvd @ Verona Ave",      lat: 25.96020, lng: -80.11970, altBaro: 0.90, hood: "South Golden Beach" },
-  { id: "FF-009", name: "Ocean Blvd @ S Island Rd",     lat: 25.95900, lng: -80.11972, altBaro: 0.65, hood: "South Golden Beach" },
-  { id: "FF-010", name: "Ocean Blvd @ Terracina Ave",   lat: 25.95710, lng: -80.11972, altBaro: 0.45, hood: "South Golden Beach" },
-  { id: "FF-011", name: "Ocean Blvd @ 194th Ln",        lat: 25.95610, lng: -80.11972, altBaro: 0.30, hood: "South Golden Beach" },
+  { id: "FF-009", name: "Ocean Blvd @ S Island Rd",     lat: 25.95900, lng: -80.11970, altBaro: 0.65, hood: "South Golden Beach" },
+  { id: "FF-010", name: "Ocean Blvd @ Terracina Ave",   lat: 25.95800, lng: -80.11970, altBaro: 0.45, hood: "South Golden Beach" },
+  { id: "FF-011", name: "40th Ave @ 194th Ln",          lat: 25.95610, lng: -80.12100, altBaro: 0.30, hood: "South Golden Beach" },
 
-  // ── Golden Beach Dr (parallel N-S road, centerline ~lng -80.12090) ──
-  { id: "FF-012", name: "Golden Beach Dr @ Centre Is",     lat: 25.96630, lng: -80.12090, altBaro: 1.50, hood: "Central Golden Beach" },
-  { id: "FF-013", name: "Golden Beach Dr @ S Parkway",     lat: 25.96500, lng: -80.12090, altBaro: 1.35, hood: "Central Golden Beach" },
-  { id: "FF-014", name: "Golden Beach Dr @ Palermo Ave",   lat: 25.96940, lng: -80.12088, altBaro: 1.70, hood: "Central Golden Beach" },
-  { id: "FF-015", name: "Golden Beach Dr @ Ravenna Ave",   lat: 25.96330, lng: -80.12092, altBaro: 1.30, hood: "South Golden Beach" },
+  // ── Golden Beach Dr (parallel N-S road, centerline ~lng -80.12080) ──
+  { id: "FF-012", name: "Golden Beach Dr @ Centre Is",     lat: 25.96630, lng: -80.12080, altBaro: 1.50, hood: "Central Golden Beach" },
+  { id: "FF-013", name: "Golden Beach Dr @ S Parkway",     lat: 25.96500, lng: -80.12080, altBaro: 1.35, hood: "Central Golden Beach" },
+  { id: "FF-014", name: "Golden Beach Dr @ Palermo Ave",   lat: 25.96940, lng: -80.12080, altBaro: 1.70, hood: "Central Golden Beach" },
+  { id: "FF-015", name: "Golden Beach Dr @ Ravenna Ave",   lat: 25.96330, lng: -80.12080, altBaro: 1.30, hood: "South Golden Beach" },
   { id: "FF-016", name: "Golden Beach Dr @ Navona Ave",    lat: 25.97230, lng: -80.12080, altBaro: 2.10, hood: "North Golden Beach" },
-  { id: "FF-017", name: "Golden Beach Dr @ Holiday Dr",    lat: 25.97510, lng: -80.12075, altBaro: 2.30, hood: "North Golden Beach" },
-  { id: "FF-018", name: "Golden Beach Dr @ Verona Ave",    lat: 25.96020, lng: -80.12095, altBaro: 0.80, hood: "South Golden Beach" },
-  { id: "FF-019", name: "Golden Beach Dr @ Terracina Ave", lat: 25.95710, lng: -80.12098, altBaro: 0.35, hood: "South Golden Beach" },
-  { id: "FF-020", name: "Golden Beach Dr @ S Island Rd",   lat: 25.95870, lng: -80.12095, altBaro: 0.55, hood: "South Golden Beach" },
+  { id: "FF-017", name: "Golden Beach Dr @ Holiday Dr",    lat: 25.97510, lng: -80.12080, altBaro: 2.30, hood: "North Golden Beach" },
+  { id: "FF-018", name: "Golden Beach Dr @ Verona Ave",    lat: 25.96070, lng: -80.12050, altBaro: 0.80, hood: "South Golden Beach" },
+  { id: "FF-019", name: "Golden Beach Dr @ Terracina Ave", lat: 25.95750, lng: -80.12050, altBaro: 0.35, hood: "South Golden Beach" },
+  { id: "FF-020", name: "Golden Beach Dr @ S Island Rd",   lat: 25.95870, lng: -80.12050, altBaro: 0.55, hood: "South Golden Beach" },
 ];
 
 function randomBetween(min: number, max: number) {
