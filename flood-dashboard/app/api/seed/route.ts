@@ -15,29 +15,29 @@ import { createServiceClient } from "@/lib/supabase";
  * Elevation decreases south → more flood-prone near Terracina/194th.
  */
 const SENSOR_GRID = [
-  // ── Ocean Blvd (A1A — main coastal N-S road, centerline ~lng -80.11960) ──
+  // ── Ocean Blvd (A1A — main coastal N-S road) ──
   { id: "FF-001", name: "Ocean Blvd @ Holiday Dr",      lat: 25.97510, lng: -80.11960, altBaro: 2.40, hood: "North Golden Beach" },
-  { id: "FF-002", name: "Ocean Blvd @ Navona Ave",      lat: 25.97230, lng: -80.11958, altBaro: 2.20, hood: "North Golden Beach" },
-  { id: "FF-003", name: "Ocean Blvd @ N Parkway",       lat: 25.97100, lng: -80.11958, altBaro: 2.00, hood: "North Golden Beach" },
-  { id: "FF-004", name: "Ocean Blvd @ Palermo Ave",     lat: 25.96940, lng: -80.11957, altBaro: 1.80, hood: "Central Golden Beach" },
-  { id: "FF-005", name: "Ocean Blvd @ Golden Beach Dr", lat: 25.96630, lng: -80.11960, altBaro: 1.60, hood: "Central Golden Beach" },
-  { id: "FF-006", name: "Ocean Blvd @ S Parkway",       lat: 25.96500, lng: -80.11962, altBaro: 1.40, hood: "Central Golden Beach" },
-  { id: "FF-007", name: "Ocean Blvd @ Ravenna Ave",     lat: 25.96330, lng: -80.11965, altBaro: 1.15, hood: "South Golden Beach" },
-  { id: "FF-008", name: "Ocean Blvd @ Verona Ave",      lat: 25.96020, lng: -80.11970, altBaro: 0.90, hood: "South Golden Beach" },
-  { id: "FF-009", name: "Ocean Blvd @ S Island Rd",     lat: 25.95900, lng: -80.11970, altBaro: 0.65, hood: "South Golden Beach" },
-  { id: "FF-010", name: "Ocean Blvd @ Terracina Ave",   lat: 25.95800, lng: -80.11970, altBaro: 0.45, hood: "South Golden Beach" },
-  { id: "FF-011", name: "40th Ave @ 194th Ln",          lat: 25.95610, lng: -80.12100, altBaro: 0.30, hood: "South Golden Beach" },
+  { id: "FF-002", name: "Ocean Blvd @ Navona Ave",      lat: 25.97230, lng: -80.11950, altBaro: 2.20, hood: "North Golden Beach" },
+  { id: "FF-003", name: "Ocean Blvd @ N Parkway",       lat: 25.97100, lng: -80.11950, altBaro: 2.00, hood: "North Golden Beach" },
+  { id: "FF-004", name: "Ocean Blvd @ Palermo Ave",     lat: 25.96940, lng: -80.11950, altBaro: 1.80, hood: "Central Golden Beach" },
+  { id: "FF-005", name: "Ocean Blvd @ Golden Beach Dr", lat: 25.96630, lng: -80.11970, altBaro: 1.60, hood: "Central Golden Beach" },
+  { id: "FF-006", name: "Ocean Blvd @ S Parkway",       lat: 25.96500, lng: -80.11970, altBaro: 1.40, hood: "Central Golden Beach" },
+  { id: "FF-007", name: "Ocean Blvd @ Ravenna Ave",     lat: 25.96330, lng: -80.11980, altBaro: 1.15, hood: "South Golden Beach" },
+  { id: "FF-008", name: "Ocean Blvd @ Verona Ave",      lat: 25.96020, lng: -80.11990, altBaro: 0.90, hood: "South Golden Beach" },
+  { id: "FF-009", name: "Ocean Blvd @ S Island Rd",     lat: 25.95870, lng: -80.11990, altBaro: 0.65, hood: "South Golden Beach" },
+  { id: "FF-010", name: "Ocean Blvd @ Terracina Ave",   lat: 25.95710, lng: -80.12000, altBaro: 0.45, hood: "South Golden Beach" },
+  { id: "FF-011", name: "Ocean Blvd @ 194th Ln",        lat: 25.95600, lng: -80.12000, altBaro: 0.30, hood: "South Golden Beach" },
 
-  // ── Golden Beach Dr (parallel N-S road, centerline ~lng -80.12080) ──
-  { id: "FF-012", name: "Golden Beach Dr @ Centre Is",     lat: 25.96630, lng: -80.12080, altBaro: 1.50, hood: "Central Golden Beach" },
-  { id: "FF-013", name: "Golden Beach Dr @ S Parkway",     lat: 25.96500, lng: -80.12080, altBaro: 1.35, hood: "Central Golden Beach" },
+  // ── Golden Beach Dr (parallel N-S road, one block west) ──
+  { id: "FF-012", name: "Golden Beach Dr @ Centre Is",     lat: 25.96630, lng: -80.12090, altBaro: 1.50, hood: "Central Golden Beach" },
+  { id: "FF-013", name: "Golden Beach Dr @ S Parkway",     lat: 25.96500, lng: -80.12090, altBaro: 1.35, hood: "Central Golden Beach" },
   { id: "FF-014", name: "Golden Beach Dr @ Palermo Ave",   lat: 25.96940, lng: -80.12080, altBaro: 1.70, hood: "Central Golden Beach" },
-  { id: "FF-015", name: "Golden Beach Dr @ Ravenna Ave",   lat: 25.96330, lng: -80.12080, altBaro: 1.30, hood: "South Golden Beach" },
-  { id: "FF-016", name: "Golden Beach Dr @ Navona Ave",    lat: 25.97230, lng: -80.12080, altBaro: 2.10, hood: "North Golden Beach" },
-  { id: "FF-017", name: "Golden Beach Dr @ Holiday Dr",    lat: 25.97510, lng: -80.12080, altBaro: 2.30, hood: "North Golden Beach" },
-  { id: "FF-018", name: "Golden Beach Dr @ Verona Ave",    lat: 25.96070, lng: -80.12050, altBaro: 0.80, hood: "South Golden Beach" },
-  { id: "FF-019", name: "Golden Beach Dr @ Terracina Ave", lat: 25.95750, lng: -80.12050, altBaro: 0.35, hood: "South Golden Beach" },
-  { id: "FF-020", name: "Golden Beach Dr @ S Island Rd",   lat: 25.95870, lng: -80.12050, altBaro: 0.55, hood: "South Golden Beach" },
+  { id: "FF-015", name: "Golden Beach Dr @ Ravenna Ave",   lat: 25.96330, lng: -80.12100, altBaro: 1.30, hood: "South Golden Beach" },
+  { id: "FF-016", name: "Golden Beach Dr @ Navona Ave",    lat: 25.97230, lng: -80.12070, altBaro: 2.10, hood: "North Golden Beach" },
+  { id: "FF-017", name: "Golden Beach Dr @ Holiday Dr",    lat: 25.97510, lng: -80.12060, altBaro: 2.30, hood: "North Golden Beach" },
+  { id: "FF-018", name: "Golden Beach Dr @ Verona Ave",    lat: 25.96020, lng: -80.12120, altBaro: 0.80, hood: "South Golden Beach" },
+  { id: "FF-019", name: "Golden Beach Dr @ Terracina Ave", lat: 25.95710, lng: -80.12120, altBaro: 0.35, hood: "South Golden Beach" },
+  { id: "FF-020", name: "Golden Beach Dr @ S Island Rd",   lat: 25.95870, lng: -80.12120, altBaro: 0.55, hood: "South Golden Beach" },
 ];
 
 function randomBetween(min: number, max: number) {
@@ -67,7 +67,7 @@ export async function POST() {
         altitude_baro: s.altBaro,
         mailbox_height_cm: 95,
         baseline_distance_cm: baselineCm,
-        status: (i < 19 ? "online" : "offline") as "online" | "offline" | "alert",
+        status: s.altBaro < 0.6 ? "alert" : i < 19 ? "online" : "offline" as const,
         battery_v: parseFloat(randomBetween(3.0, 4.2).toFixed(2)),
         last_seen: i < 19
           ? new Date(Date.now() - Math.random() * 600000).toISOString()
@@ -77,47 +77,28 @@ export async function POST() {
       };
     });
 
-    // ── 2. Seed flood events — biased toward low-elevation sensors ──
-    const floodEvents = [];
-
-    // Active floods on lowest-elevation sensors (12 of 20 — realistic storm scenario)
-    const lowestSensors = [...devices]
-      .sort((a, b) => (a.altitude_baro - a.baseline_distance_cm / 100) - (b.altitude_baro - b.baseline_distance_cm / 100))
-      .slice(0, 12);
-
-    // Mark flooding devices as "alert"
-    const floodingIds = new Set(lowestSensors.map(d => d.device_id));
-    devices.forEach(d => {
-      if (floodingIds.has(d.device_id)) d.status = "alert";
-    });
-
     for (const dev of devices) {
       await supabase.from("devices").upsert(dev, { onConflict: "device_id" });
     }
 
+    // ── 2. Seed flood events — biased toward low-elevation sensors ──
+    const floodEvents = [];
+
+    // Active floods on lowest-elevation sensors
+    const lowestSensors = [...devices]
+      .sort((a, b) => (a.altitude_baro - a.baseline_distance_cm / 100) - (b.altitude_baro - b.baseline_distance_cm / 100))
+      .slice(0, 6);
     for (const dev of lowestSensors) {
       const streetElev = dev.altitude_baro - dev.baseline_distance_cm / 100;
-      // Rainfall and tide — random but realistic
-      const rainfall = parseFloat(randomBetween(5, 35).toFixed(1));
-      const tide = parseFloat(randomBetween(0.15, 0.55).toFixed(2));
-
-      // Depth correlates with conditions:
-      // Lower elevation = deeper flooding (water pools in low spots)
-      // More rain = deeper (more runoff)
-      // Higher tide = deeper (drainage blocked)
-      let peakDepth = 10; // base
-      peakDepth += Math.max(0, (0.5 - streetElev) * 25);  // low elev boost (FF-011 at -0.65 gets +29cm)
-      peakDepth += rainfall * 0.4;                          // rain contribution
-      peakDepth += Math.max(0, (tide - 0.2) * 20);         // tide contribution
-      peakDepth = Math.floor(Math.min(55, Math.max(12, peakDepth)));
-
+      const elevFactor = Math.max(0.3, 1 - (streetElev + 0.7));
+      const peakDepth = Math.floor(randomBetween(8, 30) * elevFactor + 5);
       floodEvents.push({
         device_id: dev.device_id,
         started_at: new Date(Date.now() - Math.floor(randomBetween(10, 90)) * 60000).toISOString(),
-        ended_at: null,
+        ended_at: null, // ACTIVE — not ended yet
         peak_depth_cm: peakDepth,
-        rainfall_mm: rainfall,
-        tide_level_m: tide,
+        rainfall_mm: parseFloat(randomBetween(8, 35).toFixed(1)),
+        tide_level_m: parseFloat(randomBetween(0.2, 0.55).toFixed(2)),
       });
     }
 
