@@ -192,34 +192,51 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Subtle glow underneath flood water
+      // Layer 1: Wide ambient glow — "water reflecting light"
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#3498db",
+          "line-color": "#1a6b9c",
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 10, 0.5, 16, 1, 22],
+            0.05, 16, 0.3, 24, 0.6, 32, 1, 40],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.06, 0.4, 0.14, 1, 0.28],
-          "line-blur": 6,
+            0.05, 0.04, 0.2, 0.08, 0.5, 0.14, 1, 0.22],
+          "line-blur": 8,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Flood water on the road
+      // Layer 2: Road surface water — wide, semi-transparent, natural color
+      map.addLayer({
+        id: "flood-road-surface",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
+            0.05, "#0e3d5c", 0.3, "#145a82", 0.6, "#1a6fa0", 1, "#2196c8"],
+          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
+            0.05, 6, 0.2, 10, 0.5, 14, 1, 18],
+          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
+            0.05, 0.25, 0.2, 0.45, 0.5, 0.6, 1, 0.75],
+          "line-blur": 1.5,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      // Layer 3: Bright center line — visible water flow
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, "#1a5276", 0.4, "#2471a3", 0.7, "#2e86c1", 1, "#5dade2"],
+            0.1, "#1a6b9c", 0.4, "#2196c8", 0.7, "#42a5d6", 1, "#64b5e4"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 2, 0.3, 4, 0.6, 6, 1, 8],
+            0.1, 2, 0.3, 3.5, 0.6, 5, 1, 7],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.1, 0.4, 0.3, 0.65, 0.6, 0.8, 1, 0.92],
+            0.1, 0.5, 0.3, 0.7, 0.6, 0.85, 1, 0.95],
           "line-blur": 0,
         },
         layout: { "line-cap": "round", "line-join": "round" },
