@@ -67,11 +67,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
   const devicesRef = useRef<Device[]>(devices);
   const onDeviceClickRef = useRef(onDeviceClick);
   const floodDepthsRef = useRef<Record<string, number>>({});
-  const floodConditionsRef = useRef<FloodConditions | undefined>(undefined);
   devicesRef.current = devices;
   onDeviceClickRef.current = onDeviceClick;
   floodDepthsRef.current = floodDepths ?? {};
-  floodConditionsRef.current = floodConditions;
 
   const loadPopupData = useCallback(async (deviceId: string) => {
     try {
@@ -192,35 +190,54 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Layer 1: Soft edge — slight spread beyond road to show water pooling
+      // Layer 1: Wide ambient glow — atmospheric light around flood water
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#1a4d6e",
+          "line-color": ["interpolate", ["linear"], ["get", "depthNorm"],
+            0, "#2980b9", 0.4, "#3498db", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 8, 0.3, 12, 0.6, 16, 1, 20],
+            0.04, 6, 0.2, 14, 0.5, 22, 1, 30],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 0.06, 0.3, 0.12, 0.6, 0.18, 1, 0.25],
-          "line-blur": 3,
+            0.04, 0.04, 0.2, 0.12, 0.5, 0.22, 1, 0.38],
+          "line-blur": 10,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Layer 2: Main water — flat semi-transparent fill on road surface
+      // Layer 2: Main water body — the visible flood on the road
       map.addLayer({
         id: "flood-road-water",
         type: "line",
         source: "flood-roads",
         paint: {
           "line-color": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, "#1b4f72", 0.2, "#1f6f9f", 0.5, "#2980b9", 1, "#3498db"],
+            0.04, "#154360", 0.15, "#1a5276", 0.35, "#2471a3",
+            0.6, "#2e86c1", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 3, 0.2, 5, 0.5, 7, 1, 10],
+            0.04, 1.5, 0.15, 3, 0.35, 5.5, 0.6, 8, 1, 11],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 0.3, 0.2, 0.5, 0.5, 0.65, 1, 0.8],
-          "line-blur": 0.5,
+            0.04, 0.2, 0.15, 0.5, 0.35, 0.72, 0.6, 0.88, 1, 0.96],
+          "line-blur": 0.8,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      // Layer 3: Subtle specular core — soft highlight for surface reflection
+      map.addLayer({
+        id: "flood-road-core",
+        type: "line",
+        source: "flood-roads",
+        paint: {
+          "line-color": ["interpolate", ["linear"], ["get", "intensity"],
+            0.4, "#85c1e9", 0.7, "#aed6f1", 1, "#d4e6f1"],
+          "line-width": ["interpolate", ["linear"], ["get", "intensity"],
+            0.4, 0.8, 0.7, 1.5, 1, 2.5],
+          "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
+            0.4, 0.15, 0.7, 0.35, 1, 0.55],
+          "line-blur": 0.3,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -296,9 +313,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           : "—";
 
         const popupHTML = `
-          <div style="font-family:'DM Sans',sans-serif;min-width:220px;background:#111827;color:#e5e7eb;padding:12px;border-radius:8px;border:1px solid #1f2937">
+          <div style="font-family:'DM Sans',sans-serif;min-width:220px;background:#111827;color:#e5e7eb;padding:12px;border-radius:8px;border:1px solid #374151">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <strong style="font-size:14px;color:#f9fafb">${props.device_id}</strong>
+              <strong style="font-size:14px">${props.device_id}</strong>
               <span style="font-size:10px;color:${color};background:${color}22;padding:1px 6px;border-radius:4px;font-weight:600">${(props.status || "").toUpperCase()}</span>
             </div>
             ${props.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${props.name}</div>` : ""}
@@ -381,7 +398,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           return;
         }
 
-        const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths, floodConditionsRef.current);
+        const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths);
         // flood features set
         roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) { console.error(`[flood-refresh] error:`, err); }
@@ -513,12 +530,12 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         : queryMapboxRoads(map, devices, depths);
       if (roads.length > 0) {
         cachedRoadsRef.current = roads;
-        const features = calculateFloodFeatures(roads, devices, depths, floodConditionsRef.current);
+        const features = calculateFloodFeatures(roads, devices, depths);
         roadSrc.setData({ type: "FeatureCollection", features });
       }
       // If no roads yet, the idle event will pick them up once tiles load
     }
-  }, [devices, highlightDeviceId, floodDepths, floodCounts, floodConditions, mapReady]);
+  }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
 
   // Search location marker
   useEffect(() => {
