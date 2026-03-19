@@ -537,7 +537,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       }
       // If no roads yet, the idle event will pick them up once tiles load
     }
-  }, [devices, highlightDeviceId, floodDepths, floodCounts, mapReady]);
+  }, [devices, highlightDeviceId, floodDepths, floodCounts, floodConditions, mapReady]);
 
   // Search location marker
   useEffect(() => {
