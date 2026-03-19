@@ -192,18 +192,19 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         tolerance: 0,
       });
 
-      // Layer 1: Subtle ambient glow
+      // Layer 1: Wide ambient glow — atmospheric light around flood water
       map.addLayer({
         id: "flood-road-glow",
         type: "line",
         source: "flood-roads",
         paint: {
-          "line-color": "#1a5276",
+          "line-color": ["interpolate", ["linear"], ["get", "depthNorm"],
+            0, "#2980b9", 0.4, "#3498db", 1, "#5dade2"],
           "line-width": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 4, 0.2, 8, 0.5, 13, 1, 18],
+            0.04, 6, 0.2, 14, 0.5, 22, 1, 30],
           "line-opacity": ["interpolate", ["linear"], ["get", "intensity"],
-            0.04, 0.02, 0.2, 0.06, 0.5, 0.1, 1, 0.18],
-          "line-blur": 6,
+            0.04, 0.04, 0.2, 0.12, 0.5, 0.22, 1, 0.38],
+          "line-blur": 10,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
@@ -226,7 +227,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Layer 3: Specular core — soft highlight for surface reflection
+      // Layer 3: Subtle specular core — soft highlight for surface reflection
       map.addLayer({
         id: "flood-road-core",
         type: "line",
@@ -249,9 +250,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         type: "circle",
         source: "device-alerts",
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 14, 15, 22, 18, 30],
+          "circle-radius": 20,
           "circle-color": "#dc2626",
-          "circle-opacity": 0.15,
+          "circle-opacity": 0.12,
           "circle-blur": 0.6,
         },
       });
@@ -262,9 +263,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         type: "circle",
         source: "device-alerts",
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 8, 15, 14, 18, 20],
+          "circle-radius": 12,
           "circle-color": "#ef4444",
-          "circle-opacity": 0.1,
+          "circle-opacity": 0.08,
         },
       });
 
@@ -274,23 +275,10 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         type: "circle",
         source: "device-dots",
         paint: {
-          "circle-radius": [
-            "interpolate", ["linear"], ["zoom"],
-            12, ["case",
-              ["==", ["get", "highlighted"], true], 7,
-              ["==", ["get", "status"], "alert"], 6,
-              4
-            ],
-            15, ["case",
-              ["==", ["get", "highlighted"], true], 10,
-              ["==", ["get", "status"], "alert"], 8,
-              5
-            ],
-            18, ["case",
-              ["==", ["get", "highlighted"], true], 14,
-              ["==", ["get", "status"], "alert"], 11,
-              7
-            ]
+          "circle-radius": ["case",
+            ["==", ["get", "highlighted"], true], 9,
+            ["==", ["get", "status"], "alert"], 7,
+            5
           ],
           "circle-color": ["get", "color"],
           "circle-stroke-width": ["case",
@@ -333,32 +321,32 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
               <span style="font-size:10px;color:${color};background:${color}22;padding:1px 6px;border-radius:4px;font-weight:600">${(props.status || "").toUpperCase()}</span>
             </div>
             ${props.name ? `<div style="color:#9ca3af;font-size:12px;margin-top:2px">${props.name}</div>` : ""}
-            <hr style="border-color:#374151;margin:8px 0"/>
+            <hr style="border-color:#1f2937;margin:8px 0"/>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
               <div>
-                <span style="color:#9ca3af">Street Elev.</span><br/>
-                <span style="font-weight:600;color:#f3f4f6">${streetElev}m</span>
+                <span style="color:#6b7280">Street Elev.</span><br/>
+                <span style="font-weight:600">${streetElev}m</span>
               </div>
               <div>
-                <span style="color:#9ca3af">Last Seen</span><br/>
-                <span style="font-weight:600;color:#f3f4f6">${lastSeenText}</span>
+                <span style="color:#6b7280">Last Seen</span><br/>
+                <span style="font-weight:600">${lastSeenText}</span>
               </div>
               <div>
-                <span style="color:#9ca3af">Battery</span><br/>
+                <span style="color:#6b7280">Battery</span><br/>
                 <div style="display:flex;align-items:center;gap:4px;margin-top:2px">
-                  <div style="flex:1;height:4px;background:#374151;border-radius:2px;overflow:hidden">
+                  <div style="flex:1;height:4px;background:#1f2937;border-radius:2px;overflow:hidden">
                     <div style="width:${battPct}%;height:100%;background:${battColor};border-radius:2px"></div>
                   </div>
-                  <span style="font-size:10px;font-weight:600;color:#f3f4f6">${Number(battV).toFixed(1)}V</span>
+                  <span style="font-size:10px;font-weight:600">${Number(battV).toFixed(1)}V</span>
                 </div>
               </div>
               ${props.neighborhood ? `<div>
-                <span style="color:#9ca3af">Area</span><br/>
-                <span style="font-weight:600;color:#f3f4f6">${props.neighborhood}</span>
+                <span style="color:#6b7280">Area</span><br/>
+                <span style="font-weight:600">${props.neighborhood}</span>
               </div>` : ""}
             </div>
             <div data-popup-data="${props.device_id}" style="margin-top:4px">
-              <div style="font-size:10px;color:#9ca3af;margin-top:6px;display:flex;align-items:center;gap:4px">
+              <div style="font-size:10px;color:#6b7280;margin-top:6px;display:flex;align-items:center;gap:4px">
                 <div style="width:12px;height:12px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>
                 Loading data...
               </div>
@@ -399,28 +387,21 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
         const currentDepths = floodDepthsRef.current;
         if (currentDevices.length === 0) return;
 
-        // Query road geometry from Mapbox's vector tiles
-        const newRoads = queryMapboxRoads(map, currentDevices, currentDepths);
+        const floodingCount = currentDevices.filter(d => (currentDepths[d.device_id] ?? 0) > 0).length;
+        // flood refresh
 
-        // Merge new roads into cache (tiles load progressively)
-        if (newRoads.length > 0) {
-          const existingKeys = new Set(cachedRoadsRef.current.map(r => {
-            const s = r[0], e = r[r.length - 1];
-            return `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
-          }));
-          for (const road of newRoads) {
-            const s = road[0], e = road[road.length - 1];
-            const key = `${s[0].toFixed(6)},${s[1].toFixed(6)}|${e[0].toFixed(6)},${e[1].toFixed(6)}`;
-            if (!existingKeys.has(key)) {
-              cachedRoadsRef.current.push(road);
-              existingKeys.add(key);
-            }
-          }
+        // Query road geometry from Mapbox's vector tiles
+        const roads = queryMapboxRoads(map, currentDevices, currentDepths);
+        if (roads.length > 0) {
+          cachedRoadsRef.current = roads;
+        }
+        if (cachedRoadsRef.current.length === 0) {
+          // no roads yet
+          return;
         }
 
-        if (cachedRoadsRef.current.length === 0) return;
-
         const features = calculateFloodFeatures(cachedRoadsRef.current, currentDevices, currentDepths, floodConditionsRef.current);
+        // flood features set
         roadSrc.setData({ type: "FeatureCollection", features });
       } catch (err) { console.error(`[flood-refresh] error:`, err); }
     };
@@ -434,14 +415,6 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       floodRefreshTimer = setTimeout(refreshFloodFromTiles, 200);
     });
-
-    // Aggressive retry for first 30s — tiles load progressively
-    let floodRetryCount = 0;
-    const floodRetryTimer = setInterval(() => {
-      floodRetryCount++;
-      refreshFloodFromTiles();
-      if (floodRetryCount >= 15) clearInterval(floodRetryTimer); // stop after 30s
-    }, 2000);
 
     // --- Render-loop kick for Next.js dynamic imports ---
     // Mapbox tiles can stall on initial load in Next.js. The base map eventually
@@ -478,7 +451,6 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
     return () => {
       clearInterval(earlyInitTimer);
-      clearInterval(floodRetryTimer);
       clearTimeout(lastResortTimer);
       if (floodRefreshTimer) clearTimeout(floodRefreshTimer);
       map.off("idle", refreshFloodFromTiles);
@@ -546,22 +518,11 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     if (alertSrc) alertSrc.setData({ type: "FeatureCollection", features: alerts });
     if (dotSrc) dotSrc.setData({ type: "FeatureCollection", features: dots });
 
-    // Center on flooding sensors at zoom 15+ (road tiles load at this level)
-    // Only auto-center once on initial load
-    const dotSource = map.getSource("device-dots") as (mapboxgl.GeoJSONSource & { _hasAutoFit?: boolean }) | undefined;
-    if (devices.length > 0 && dotSource && !dotSource._hasAutoFit) {
-      const floodingDevices = devices.filter(d => (floodDepths?.[d.device_id] ?? 0) > 0);
-      if (floodingDevices.length > 0) {
-        // Center on flood zone centroid
-        const avgLng = floodingDevices.reduce((s, d) => s + d.lng, 0) / floodingDevices.length;
-        const avgLat = floodingDevices.reduce((s, d) => s + d.lat, 0) / floodingDevices.length;
-        map.jumpTo({ center: [avgLng, avgLat], zoom: 15.2 });
-      } else {
-        const bounds = new mapboxgl.LngLatBounds();
-        devices.forEach((d) => bounds.extend([d.lng, d.lat]));
-        map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
-      }
-      dotSource._hasAutoFit = true;
+    // Fit bounds
+    if (devices.length > 0 && map.getZoom() === 15) {
+      const bounds = new mapboxgl.LngLatBounds();
+      devices.forEach((d) => bounds.extend([d.lng, d.lat]));
+      map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
     }
 
     // Flood water: use cached roads from idle event, or query now if available
