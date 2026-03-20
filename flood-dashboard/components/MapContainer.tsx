@@ -10,11 +10,15 @@ import { queryMapboxRoads, calculateFloodFeatures, type FloodConditions } from "
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-function sensorColor(status: string, floodDepth: number): string {
-  if (status === "offline") return "#4b5563"; // grey
-  if (floodDepth > 10) return "#dc2626";      // red — severe flooding
-  if (floodDepth > 0) return "#f59e0b";        // orange/amber — moderate flooding
-  return "#059669";                             // green — no flooding
+// FF-001 is the live hardware sensor — show it in blue to distinguish from seed data
+const LIVE_SENSORS = new Set(["FF-001"]);
+
+function sensorColor(deviceId: string, status: string, floodDepth: number): string {
+  if (LIVE_SENSORS.has(deviceId)) return "#3b82f6"; // blue — live hardware sensor
+  if (status === "offline") return "#4b5563";        // grey
+  if (floodDepth > 10) return "#dc2626";             // red — severe flooding
+  if (floodDepth > 0) return "#f59e0b";              // orange/amber — moderate flooding
+  return "#059669";                                   // green — no flooding
 }
 
 function buildSparklineSVG(values: number[], color = "#3b82f6", label = ""): string {
@@ -470,7 +474,7 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
     const depths = floodDepths ?? {};
     devices.forEach((device) => {
       const depth = depths[device.device_id] ?? 0;
-      const color = sensorColor(device.status, depth);
+      const color = sensorColor(device.device_id, device.status, depth);
       const isHighlighted = device.device_id === highlightDeviceId;
 
       const lastSeenText = device.last_seen
