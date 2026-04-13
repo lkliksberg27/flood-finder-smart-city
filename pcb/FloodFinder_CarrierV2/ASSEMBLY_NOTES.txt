@@ -1,0 +1,40 @@
+FLOOD FINDER CARRIER BOARD V2 — ASSEMBLY NOTES
+================================================
+
+FILES:
+  BOM_FloodFinder_V2.csv  — Upload to JLCPCB when ordering
+  CPL_FloodFinder_V2.csv  — Component placement (adjust after PCB layout)
+  NETLIST.txt             — Complete electrical connections reference
+
+WHAT TO DO:
+  1. Open EasyEDA (easyeda.com) or KiCad
+  2. Create schematic per NETLIST.txt connections
+  3. Run ERC — must pass with zero errors
+  4. Create 65x45mm 2-layer PCB
+  5. Place components, route traces
+  6. Run DRC — must pass with zero errors
+  7. Export Gerber + BOM + CPL
+  8. Upload to jlcpcb.com, enable SMT Assembly (top side)
+
+SMD PARTS (JLCPCB assembles):
+  U1  BMP390          C5124834  Extended
+  U2  MPU-6050        C24112    Extended
+  C1-C4  100nF 0402   C1525     BASIC (free)
+  C5  10nF 0402       C15195    BASIC (free)
+  R1-R2  4.7K 0402    C25900    BASIC (free)
+
+THROUGH-HOLE (hand solder after receiving boards):
+  J1,J2  Female 1x18 2.54mm pin headers (Heltec socket)
+  J3     JST-XH 4-pin 2.54mm (ultrasonic connector)
+  SW1    EC11 rotary encoder with push button
+
+CRITICAL RULES:
+  - BMP390 pressure port faces UP, no copper within 3mm above
+  - MPU6050 exposed pad -> GND with 4+ vias
+  - MPU6050 REGOUT cap C5 (10nF) is MANDATORY
+  - No traces under Heltec antenna area (top-right)
+  - Bottom layer = solid ground pour
+  - Only ONE set of I2C pull-ups (R1, R2)
+
+FIRMWARE FIX REQUIRED:
+  Wire.begin(5, 4);  -->  Wire.begin(17, 18);

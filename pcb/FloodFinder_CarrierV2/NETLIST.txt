@@ -1,0 +1,72 @@
+FLOOD FINDER CARRIER BOARD V2 — COMPLETE NETLIST
+==================================================
+All connections verified against firmware and datasheets.
+
++3V3 NET (from Heltec V4 3V3 pin):
+  U1 pin 10 (VDD)      — BMP390 analog supply
+  U1 pin 1  (VDDIO)    — BMP390 digital supply
+  U1 pin 6  (CSB)      — MUST be HIGH for I2C mode
+  U1 pin 5  (SDO)      — HIGH = I2C address 0x77
+  U2 pin 13 (VDD)      — MPU6050 main supply
+  U2 pin 8  (VLOGIC)   — MPU6050 I2C logic level
+  R1 pin 1             — SDA pull-up (4.7K to 3.3V)
+  R2 pin 1             — SCL pull-up (4.7K to 3.3V)
+  J3 pin 1  (VCC)      — Ultrasonic sensor power
+  C1 pin 1             — BMP390 VDD decoupling
+  C2 pin 1             — BMP390 VDDIO decoupling
+  C3 pin 1             — MPU6050 VDD decoupling
+  C4 pin 1             — MPU6050 VLOGIC decoupling
+
+GND NET (from Heltec V4 GND pin):
+  U1 pin 3  (VSS)      — BMP390 ground
+  U1 pin 8  (VSS)      — BMP390 ground
+  U1 pin 9  (VSS)      — BMP390 ground
+  U2 pin 18 (GND)      — MPU6050 ground
+  U2 pin 25 (EP)       — MPU6050 exposed pad (4+ vias to ground plane)
+  U2 pin 1  (CLKIN)    — Tie to GND for internal oscillator
+  U2 pin 11 (FSYNC)    — Tie to GND when unused
+  U2 pin 9  (AD0)      — GND = I2C address 0x68
+  C1 pin 2             — BMP390 VDD decoupling
+  C2 pin 2             — BMP390 VDDIO decoupling
+  C3 pin 2             — MPU6050 VDD decoupling
+  C4 pin 2             — MPU6050 VLOGIC decoupling
+  C5 pin 2             — MPU6050 REGOUT filter
+  J3 pin 4  (GND)      — Ultrasonic ground
+  SW1 pin 2 (C)        — Encoder common
+  SW1 pin 5 (S2)       — Encoder switch ground
+
+SDA NET (GPIO 17):
+  U1 pin 4  (SDI)      — BMP390 I2C data
+  U2 pin 24 (SDA)      — MPU6050 I2C data
+  R1 pin 2             — Pull-up resistor
+
+SCL NET (GPIO 18):
+  U1 pin 2  (SCK)      — BMP390 I2C clock
+  U2 pin 23 (SCL)      — MPU6050 I2C clock
+  R2 pin 2             — Pull-up resistor
+
+TRIG NET (GPIO 2):
+  J3 pin 2  (TRIG)     — Ultrasonic trigger
+
+ECHO NET (GPIO 3):
+  J3 pin 3  (ECHO)     — Ultrasonic echo
+
+ENC_CLK NET (GPIO 5):
+  SW1 pin 1 (A)        — Encoder channel A
+
+ENC_DT NET (GPIO 6):
+  SW1 pin 3 (B)        — Encoder channel B
+
+ENC_SW NET (GPIO 7):
+  SW1 pin 4 (S1)       — Encoder push button
+
+REGOUT NET (internal):
+  U2 pin 10 (REGOUT)   — MPU6050 internal regulator output
+  C5 pin 1             — 10nF filter cap (MANDATORY)
+
+NOT CONNECTED:
+  U1 pin 7  (INT)      — BMP390 interrupt (unused)
+  U2 pin 6  (AUX_DA)   — MPU6050 aux I2C data (unused)
+  U2 pin 7  (AUX_CL)   — MPU6050 aux I2C clock (unused)
+  U2 pin 12 (INT)      — MPU6050 interrupt (unused)
+  U2 pins 2-5,14-17,19-22 — NC pins (not connected internally)
