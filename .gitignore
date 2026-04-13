@@ -7,3 +7,6 @@ build/
 .next/
 .DS_Store
 *.log
+
+# Firmware secrets
+firmware/flood_sensor/secrets.h

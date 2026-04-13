@@ -72,8 +72,7 @@
 #define ADDR_LNG               14    // double (8 bytes)
 
 // ── Supabase ────────────────────────────────────────────────
-const char* SUPABASE_URL = "https://zywpdxnwkvotsyjisjwg.supabase.co";
-const char* SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp5d3BkeG53a3ZvdHN5amlzandnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjcxMzg1OSwiZXhwIjoyMDg4Mjg5ODU5fQ.6HPiPvRtpbH8KzqzAGwZevv2L8LvKjPEMbMOv_Wm27E";
+#include "secrets.h"  // Create from secrets.h.example with your real keys
 
 const char* DEVICE_ID = "FF-001";
 const int MAILBOX_HEIGHT_CM = 95;
