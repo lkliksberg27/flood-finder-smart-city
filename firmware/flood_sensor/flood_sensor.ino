@@ -22,9 +22,10 @@
  *   - WiFiManager by tzapu
  *   - ArduinoJson by Benoit Blanchon
  *
- * Wiring:
- *   JSN-SR04T TRIG → GPIO 2,  ECHO → GPIO 3,  VCC → 5V
- *   BMP390 SDA → GPIO 5,  SCL → GPIO 4,  VIN → 3.3V
+ * Wiring (Carrier Board V2 for Heltec V4):
+ *   JSN-SR04T TRIG → GPIO 2, ECHO → GPIO 3, VCC → 3.3V (on J3 left header)
+ *   BMP390 + MPU6050 SDA → GPIO 33, SCL → GPIO 34 (on J2 right header — external I2C, Wire1)
+ *   NOTE: Cannot use GPIO17/18 (OLED_SDA/OLED_SCL) — they are internal-only on V4
  *   GPS (L76) → GNSS connector (RX=39, TX=38)
  */
 
@@ -142,7 +143,9 @@ void initHardware() {
   display.setFont(ArialMT_Plain_10);
 
   // BMP390
-  Wire.begin(5, 4);
+  // Heltec V4 carrier: use GPIO33/34 for external I2C (Wire1)
+  // GPIO17/18 are internal-only to OLED on V4 — not on side headers.
+  Wire.begin(33, 34);  // SDA=GPIO33, SCL=GPIO34
   if (bmp.begin_I2C(0x77, &Wire)) {
     bmpAvailable = true;
     bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_2X);
