@@ -12,6 +12,10 @@ export interface Device {
   installed_at: string | null;
   neighborhood: string | null;
   notes: string | null;
+  // Set by derive_node_elevations() in the database. 'baro_relative' means
+  // heights are measured up from the lowest monitored street, not surveyed.
+  // Optional because demo data and older databases do not carry it.
+  elevation_source?: 'survey' | 'baro' | 'baro_relative' | null;
 }
 
 export interface SensorReading {

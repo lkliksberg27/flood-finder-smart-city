@@ -55,11 +55,17 @@ function SensorsContent() {
     fetchData();
   }, [fetchData]);
 
-  // Realtime updates when device status changes
+  // Realtime updates when device status changes.
+  //
+  // Must be base tables, not the `devices` view: Postgres cannot publish a
+  // view to a Supabase Realtime publication, so the old subscription to
+  // `devices` failed silently and this page never updated on its own. Note
+  // there is no poll here either, so it sat on first-load data indefinitely.
   useEffect(() => {
     const channel = getSupabase()
       .channel("sensors-page")
-      .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, () => fetchData())
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "readings" }, () => fetchData())
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "nodes" }, () => fetchData())
       .subscribe();
     return () => { getSupabase().removeChannel(channel); };
   }, [fetchData]);
@@ -290,7 +296,7 @@ function SensorsContent() {
                   </td>
                   <td className="px-4 py-3">
                     {d.altitude_baro != null
-                      ? `${(d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100).toFixed(1)}m`
+                      ? `${(Math.round((d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100) * 10) / 10 + 0).toFixed(1)}m`
                       : "—"}
                   </td>
                   <td className="px-4 py-3">
@@ -368,7 +374,7 @@ function SensorsContent() {
                             <p className="text-text-secondary">Street Elev.</p>
                             <p className="font-medium">
                               {d.altitude_baro != null
-                                ? `${(d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100).toFixed(2)}m`
+                                ? `${(Math.round((d.altitude_baro - (d.baseline_distance_cm ?? 0) / 100) * 100) / 100 + 0).toFixed(2)}m`
                                 : "—"}
                             </p>
                           </div>

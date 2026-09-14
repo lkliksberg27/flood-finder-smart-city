@@ -111,6 +111,62 @@ export function ElevationMap({ devices, floodCounts, showOverlay }: Props) {
         map.panBy([-1, 0], { duration: 0 });
       });
 
+      // Flow network. buildFlowNetwork() produced these edges all along but
+      // nothing ever drew them, so the map showed where water pools without
+      // ever showing where it comes from. Added underneath the dots.
+      map.addSource("elev-flow", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+
+      map.addLayer({
+        id: "elev-flow-lines",
+        type: "line",
+        source: "elev-flow",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          // Steeper gradient means faster, more decisive flow, so draw it
+          // heavier. 0.5% to 6% covers everything this terrain produces.
+          "line-width": [
+            "interpolate", ["linear"], ["get", "gradientPct"],
+            0.5, 1.2,
+            2, 2.4,
+            6, 4.5,
+          ],
+          "line-color": [
+            "interpolate", ["linear"], ["get", "gradientPct"],
+            0.5, "#1e3a8a",
+            2, "#2563eb",
+            6, "#60a5fa",
+          ],
+          "line-opacity": 0.7,
+        },
+      });
+
+      // Direction. Chevrons repeated along each edge, rotated with the map so
+      // they always point the way the water actually goes.
+      map.addLayer({
+        id: "elev-flow-arrows",
+        type: "symbol",
+        source: "elev-flow",
+        layout: {
+          "symbol-placement": "line",
+          "symbol-spacing": 46,
+          "text-field": "\u25B6",
+          "text-size": 11,
+          "text-keep-upright": false,
+          "text-rotation-alignment": "map",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#93c5fd",
+          "text-halo-color": "#0b1220",
+          "text-halo-width": 1,
+          "text-opacity": 0.9,
+        },
+      });
+
       map.addSource("elev-dots", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -159,6 +215,26 @@ export function ElevationMap({ devices, floodCounts, showOverlay }: Props) {
       });
 
       setMapReady(true);
+
+      map.on("click", "elev-flow-lines", (e) => {
+        if (!e.features?.[0]) return;
+        const p = e.features[0].properties!;
+        new mapboxgl.Popup({ closeButton: false, offset: 8 })
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<div style="font:12px system-ui;color:#e5e7eb;background:#0b1220;` +
+            `padding:8px 10px;border-radius:6px;min-width:170px">` +
+            `<div style="color:#93c5fd;font-weight:600;margin-bottom:4px">Flow path</div>` +
+            `<div>${p.from}</div>` +
+            `<div style="color:#6b7280;margin:2px 0">&darr; drops ${p.dropCm} cm</div>` +
+            `<div>${p.to}</div>` +
+            `<div style="color:#6b7280;margin-top:4px">gradient ${p.gradientPct}%</div>` +
+            `</div>`,
+          )
+          .addTo(map);
+      });
+      map.on("mouseenter", "elev-flow-lines", () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", "elev-flow-lines", () => { map.getCanvas().style.cursor = ""; });
 
       // Click popup
       map.on("click", "elev-dots-layer", (e) => {
@@ -242,9 +318,35 @@ export function ElevationMap({ devices, floodCounts, showOverlay }: Props) {
       return;
     }
 
-    // Build flow network for accumulation
+    // Build flow network for accumulation and for drawing
     const edges = buildFlowNetwork(devices);
     const accumulation = computeFlowAccumulation(devices, edges);
+
+    const byId = new Map(devices.map((d) => [d.device_id, d]));
+    const flowSrc = map.getSource("elev-flow") as mapboxgl.GeoJSONSource | undefined;
+    const flowFeatures: GeoJSON.Feature[] = showOverlay
+      ? edges.flatMap((e) => {
+          const a = byId.get(e.from);
+          const b = byId.get(e.to);
+          if (!a || !b) return [];
+          return [{
+            type: "Feature" as const,
+            geometry: {
+              type: "LineString" as const,
+              coordinates: [[a.lng, a.lat], [b.lng, b.lat]],
+            },
+            properties: {
+              from: a.name ?? a.device_id,
+              to: b.name ?? b.device_id,
+              // gradient is a dimensionless slope; percent reads better and
+              // keeps the style interpolation stops legible
+              gradientPct: +(e.gradient * 100).toFixed(3),
+              dropCm: Math.round((streetElevation(a) - streetElevation(b)) * 100),
+            },
+          }];
+        })
+      : [];
+    flowSrc?.setData({ type: "FeatureCollection", features: flowFeatures });
 
     // Sensor dots with estimated flood depth
     const dotFeatures: GeoJSON.Feature[] = withElev.map((d) => {

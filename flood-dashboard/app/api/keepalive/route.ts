@@ -18,7 +18,23 @@ export async function GET(req: NextRequest) {
       .from("devices")
       .select("device_id", { count: "exact", head: true });
     if (error) throw new Error(error.message);
-    return NextResponse.json({ ok: true, devices: count ?? 0, at: new Date().toISOString() });
+
+    // Refresh barometric elevations while we are here. Nothing in a packet
+    // carries elevation, so this is what keeps the flow map, the elevation page
+    // and road-dip analysis populated for real nodes. It updates nothing until
+    // the barometers are calibrated and enough readings exist, and a failure
+    // here must not fail the keepalive itself.
+    const { data: elev, error: elevErr } = await supabase.rpc("derive_node_elevations");
+    const elevation = elevErr
+      ? { error: elevErr.message }
+      : { updated: Array.isArray(elev) ? elev.length : 0 };
+
+    return NextResponse.json({
+      ok: true,
+      devices: count ?? 0,
+      elevation,
+      at: new Date().toISOString(),
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

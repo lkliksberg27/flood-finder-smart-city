@@ -10,3 +10,4 @@ build/
 
 # Firmware secrets
 firmware/flood_sensor/secrets.h
+.vercel

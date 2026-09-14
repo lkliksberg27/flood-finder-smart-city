@@ -155,13 +155,27 @@ function OverviewContent() {
     return () => clearInterval(interval);
   }, []);
 
-  // Realtime subscription
+  // Realtime subscription.
+  //
+  // These MUST name base tables. `devices` and `sensor_readings` are VIEWS,
+  // and Postgres cannot publish a view to a Supabase Realtime publication.
+  // Subscribing to one fails silently: no error, no warning, and no event
+  // ever arrives. This channel watched `devices`, so the map never moved on
+  // live data at all - it only ever caught up on the 30 s poll.
+  //
+  // `readings` and `nodes` are the tables the `devices` view is built from,
+  // and both are in the publication (schema.sql, schema_unify.sql).
   useEffect(() => {
     const channel = getSupabase()
       .channel("overview-devices")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "devices" },
+        { event: "INSERT", schema: "public", table: "readings" },
+        () => fetchData()
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "nodes" },
         () => fetchData()
       )
       .on(

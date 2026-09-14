@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { demoDevices, demoEvents } from "@/lib/demo-data";
 import { createServiceClient } from "@/lib/supabase";
 
 export async function GET() {
@@ -56,8 +57,22 @@ export async function GET() {
       },
       timestamp: new Date().toISOString(),
     });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    // Same reasoning as /api/data: a missing database should degrade to the
+    // generated dataset, not to an error page.
+    const devices = demoDevices();
+    const active = demoEvents().filter((e) => e.ended_at === null);
+    console.warn("[demo] /api/stats: live data unavailable, serving generated dataset");
+    return NextResponse.json({
+      totalDevices: devices.length,
+      online: devices.filter((d) => d.status !== "offline").length,
+      offline: devices.filter((d) => d.status === "offline").length,
+      activeFloodEvents: active.length,
+      activeEvents: active,
+      avgBattery: parseFloat(
+        (devices.reduce((s2, d) => s2 + (d.battery_v ?? 0), 0) / (devices.length || 1)).toFixed(2)),
+      devices,
+      demo: true,
+    });
   }
 }

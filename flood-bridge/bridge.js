@@ -29,123 +29,129 @@ async function handleMessage(topic, payload) {
     return;
   }
 
+  if (!data.deviceId) {
+    console.error('[BRIDGE] Message with no deviceId on', topic);
+    return;
+  }
+
   console.log(`[BRIDGE] Received from ${data.deviceId}: distance=${data.distanceCm}cm battery=${data.batteryV}V`);
 
-  const valid = isValid(data);
+  // A node without a time fix can send 0 or a garbage timestamp. Date(NaN)
+  // throws on toISOString(), and a 0 becomes 1970, which silently poisons
+  // every time-series query. Fall back to arrival time instead.
+  const sentMs = Number(data.timestamp) * 1000;
+  const recordedAt =
+    Number.isFinite(sentMs) && sentMs > 946684800000 // 2000-01-01
+      ? new Date(sentMs).toISOString()
+      : new Date().toISOString();
 
-  // Look up device to get calibration values
-  const { data: device, error: lookupErr } = await supabase
-    .from('devices')
-    .select('mailbox_height_cm, baseline_distance_cm')
-    .eq('device_id', data.deviceId)
+  const valid = isValid(data);
+  if (!valid) {
+    console.warn(
+      `[BRIDGE] Reading from ${data.deviceId} failed range checks ` +
+        `(distance=${data.distanceCm} battery=${data.batteryV} ` +
+        `lat=${data.lat} lng=${data.lng}). Storing it flagged invalid and ` +
+        'not letting it drive alerts.'
+    );
+  }
+
+  // `devices` is a VIEW over `nodes` now, and a view cannot be written to, so
+  // everything below targets the canonical tables. A LoRa node reaching
+  // /api/uplink and a WiFi node reaching this bridge therefore land in exactly
+  // the same place, which is the only way the apps can show both.
+  //
+  // The bridge speaks the WiFi-era JSON: deviceId, distanceCm, centimetres.
+  // `readings` is in millimetres, so convert once, here.
+  const devEui = data.devEui || data.deviceId;
+
+  const { data: node, error: lookupErr } = await supabase
+    .from('nodes')
+    .select('dev_eui, baseline_mm')
+    .eq('dev_eui', devEui)
     .single();
 
   if (lookupErr && lookupErr.code === 'PGRST116') {
-    // Device not found — auto-register with defaults
     console.log(`[BRIDGE] Unknown device ${data.deviceId} — auto-registering`);
-    await supabase.from('devices').insert({
+    const { error: regErr } = await supabase.from('nodes').insert({
+      dev_eui: devEui,
       device_id: data.deviceId,
       lat: data.lat,
-      lng: data.lng,
-      altitude_baro: data.altitudeBaro,
-      mailbox_height_cm: 95,
-      status: 'online',
-      battery_v: data.batteryV,
+      lon: data.lng,
+      elevation_mm: data.altitudeBaro != null ? Math.round(data.altitudeBaro * 1000) : null,
+      baseline_mm: 950,
       last_seen: new Date().toISOString(),
     });
+    if (regErr) {
+      console.error('[DB] Auto-register failed for', data.deviceId, regErr.message);
+      // readings has a foreign key onto nodes, so the insert below would fail
+      // too. Stop here rather than emit a confusing second error.
+      return;
+    }
   }
 
-  const mailboxHeight = device?.mailbox_height_cm ?? 95;
-  const floodDepth = Math.max(0, mailboxHeight - data.distanceCm);
-  const waterDetected = floodDepth > 5;
+  // Depth is derived in SQL from baseline_mm, so the bridge does not compute or
+  // store it. It only needs the millimetre distance. Keeping depth out of the
+  // write path is what lets a later recalibration of baseline_mm fix a node's
+  // entire history rather than only its future rows.
+  const distanceMm = Math.round(data.distanceCm * 10);
+  const baselineMm = node?.baseline_mm ?? 950;
+  const floodDepthMm = Math.max(0, baselineMm - distanceMm);
 
-  // Insert reading
-  const { error: readErr } = await supabase.from('sensor_readings').insert({
+  const { error: readErr } = await supabase.from('readings').insert({
+    dev_eui: devEui,
     device_id: data.deviceId,
+    packet_type: 'reading',
+    distance_mm: distanceMm,
     lat: data.lat,
-    lng: data.lng,
-    distance_cm: data.distanceCm,
-    water_detected: waterDetected,
-    flood_depth_cm: floodDepth,
-    battery_v: data.batteryV,
-    recorded_at: new Date(data.timestamp * 1000).toISOString(),
+    lon: data.lng,
+    vbat_v: data.batteryV,
+    baseline_mm: baselineMm,
+    is_valid: valid,
+    sensor_degraded: !valid,
+    source: 'mqtt-bridge',
+    received_at: recordedAt,
   });
   if (readErr) console.error('[DB] Insert reading error:', readErr.message);
-  else console.log(`[DB] Reading saved for ${data.deviceId} | flood_depth=${floodDepth}cm`);
+  else console.log(`[DB] Reading saved for ${data.deviceId} | depth=${floodDepthMm}mm`);
 
-  // Update device status + altitude from barometric sensor
-  const newStatus = waterDetected ? 'alert' : 'online';
-  const updateData = {
-    last_seen: new Date().toISOString(),
-    battery_v: data.batteryV,
-    status: newStatus,
-  };
-  // Update device elevation from BMP390 if available
-  if (data.altitudeBaro != null) {
-    updateData.altitude_baro = data.altitudeBaro;
+  // No device-status update here any more. `nodes.last_seen` is maintained by
+  // the touch_node trigger on every readings insert, and `devices.status` is
+  // derived in the view from last_seen plus the latest depth. Writing status
+  // by hand would fight the view and could not be written to it anyway.
+
+  // Flood events are opened and closed by the maintain_flood_event trigger on
+  // `readings`, with hysteresis, so both ingest paths produce identical event
+  // history. The bridge's only remaining job here is to attach the NOAA
+  // context, which the database cannot fetch for itself.
+  if (valid && floodDepthMm >= 50) {
+    await enrichOpenEvent(data.deviceId, data.lat, data.lng);
   }
-  const { error: devErr } = await supabase
-    .from('devices')
-    .update(updateData)
-    .eq('device_id', data.deviceId);
-  if (devErr) console.error('[DB] Update device error:', devErr.message);
-
-  // Manage flood events
-  await manageFloodEvent(data.deviceId, waterDetected, floodDepth);
 }
 
-// ── Flood event tracking ────────────────────────────────────
-async function manageFloodEvent(deviceId, waterDetected, floodDepth) {
-  // Find open event (no ended_at)
-  const { data: openEvents } = await supabase
+// ── NOAA enrichment ─────────────────────────────────────────
+// The trigger opens the event; this fills in the weather context once. Only
+// touches rows where rainfall is still null, so it costs one NOAA call per
+// event rather than one per reading.
+async function enrichOpenEvent(deviceId, lat, lng) {
+  const { data: open } = await supabase
     .from('flood_events')
-    .select('id, peak_depth_cm, started_at')
+    .select('id, rainfall_mm')
     .eq('device_id', deviceId)
     .is('ended_at', null)
     .limit(1);
 
-  const openEvent = openEvents?.[0];
+  const ev = open?.[0];
+  if (!ev || ev.rainfall_mm !== null) return;
 
-  if (waterDetected) {
-    if (openEvent) {
-      if (floodDepth > openEvent.peak_depth_cm) {
-        await supabase.from('flood_events')
-          .update({ peak_depth_cm: floodDepth })
-          .eq('id', openEvent.id);
-      }
-    } else {
-      // Start new flood event — enrich with NOAA weather + tide data
-      const { data: dev } = await supabase
-        .from('devices')
-        .select('lat, lng')
-        .eq('device_id', deviceId)
-        .single();
-
-      let rainfall = null, tide = null;
-      if (dev) {
-        const [r, t] = await Promise.all([
-          getRainfall(dev.lat, dev.lng),
-          getTideLevel(dev.lat, dev.lng),
-        ]);
-        rainfall = r?.rainfallMm ?? null;
-        tide = t?.tideM ?? null;
-      }
-
-      await supabase.from('flood_events').insert({
-        device_id: deviceId,
-        peak_depth_cm: floodDepth,
-        rainfall_mm: rainfall,
-        tide_level_m: tide,
-      });
-      console.log(`[EVENT] Flood started at ${deviceId} — depth=${floodDepth}cm rain=${rainfall}mm tide=${tide}m`);
-    }
-  } else if (openEvent) {
-    const endedAt = new Date().toISOString();
-    const durationMin = Math.round((new Date(endedAt).getTime() - new Date(openEvent.started_at).getTime()) / 60000);
-    await supabase.from('flood_events')
-      .update({ ended_at: endedAt })
-      .eq('id', openEvent.id);
-    console.log(`[EVENT] Flood ended at ${deviceId} — lasted ${durationMin} min`);
+  try {
+    const [r, t] = await Promise.all([getRainfall(lat, lng), getTideLevel(lat, lng)]);
+    await supabase.from('flood_events').update({
+      rainfall_mm: r?.rainfallMm ?? null,
+      tide_level_m: t?.tideM ?? null,
+    }).eq('id', ev.id);
+    console.log(`[EVENT] Enriched ${deviceId} — rain=${r?.rainfallMm ?? '?'}mm tide=${t?.tideM ?? '?'}m`);
+  } catch (e) {
+    console.error('[EVENT] NOAA enrichment failed:', e.message);
   }
 }
 
@@ -379,7 +385,7 @@ async function runAIAnalysis() {
     const anthropic = new Anthropic();
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       max_tokens: 4000,
       messages: [{
         role: 'user',
@@ -484,32 +490,12 @@ Generate 6-8 recommendations mixing ALL data sources.`,
 // Run AI analysis every Sunday at 6:00 AM
 cron.schedule('0 6 * * 0', runAIAnalysis);
 
-// ── Stale device detection (every 30 minutes) ────────────────
-// Mark devices as offline if they haven't reported in 2+ hours
-async function checkStaleDevices() {
-  const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
-  const { data: staleDevices, error } = await supabase
-    .from('devices')
-    .select('device_id')
-    .neq('status', 'offline')
-    .lt('last_seen', twoHoursAgo);
+// ── Stale device detection ──────────────────────────────────
+// Deleted deliberately. `devices.status` is computed in the view from
+// last_seen against the app_settings.stale_minutes threshold, so a node goes
+// offline the moment it stops reporting, with no cron and no write. The old
+// job also wrote to `devices`, which is now a view and rejects writes.
 
-  if (error) {
-    console.error('[STALE] Error checking stale devices:', error.message);
-    return;
-  }
-
-  if (staleDevices && staleDevices.length > 0) {
-    for (const d of staleDevices) {
-      await supabase.from('devices')
-        .update({ status: 'offline' })
-        .eq('device_id', d.device_id);
-    }
-    console.log(`[STALE] Marked ${staleDevices.length} device(s) as offline: ${staleDevices.map((d) => d.device_id).join(', ')}`);
-  }
-}
-cron.schedule('*/30 * * * *', checkStaleDevices);
-checkStaleDevices(); // Run on startup
 
 // Export for on-demand use by dashboard API
 module.exports = { runAIAnalysis };

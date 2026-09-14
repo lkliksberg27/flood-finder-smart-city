@@ -326,7 +326,10 @@ export async function POST(request: Request) {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const response = await anthropic.messages.create({
-      model: neighborhoodFilter ? "claude-haiku-4-5-20251001" : "claude-sonnet-4-6",
+      // Latest models. A stale id here does not fail at build time, only at
+      // the moment someone clicks Run Analysis, which is the worst time to
+      // find out.
+      model: neighborhoodFilter ? "claude-haiku-4-5-20251001" : "claude-sonnet-5",
       max_tokens: neighborhoodFilter ? 1500 : 2048,
       messages: [{
         role: "user",

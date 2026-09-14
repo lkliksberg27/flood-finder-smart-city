@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
+import { demoDevices, demoEvents, demoRecommendations, demoReadings, demoFloodCounts } from "@/lib/demo-data";
 
 /**
  * Unified data API that uses the service client to bypass RLS.
@@ -204,8 +205,68 @@ export async function GET(request: Request) {
         );
     }
   } catch (err) {
+    // Supabase unreachable. Rather than 500 the page, serve the generated
+    // dataset so the dashboard is still usable with no database behind it.
+    // The banner in the layout makes clear which one is on screen.
+    const fb = demoFallback(table, searchParams);
+    if (fb) {
+      console.warn(`[demo] /api/data?table=${table}: live data unavailable, serving generated dataset`);
+      return NextResponse.json(fb);
+    }
     const msg = err instanceof Error ? err.message : "Query failed";
     console.error(`[DATA API] Error for ${table}:`, msg);
     return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+/** Generated stand-in for each table the dashboard asks for. */
+function demoFallback(table: string | null, sp: URLSearchParams): unknown | null {
+  const events = demoEvents();
+  const devices = demoDevices();
+  const byId = new Map(devices.map((d) => [d.device_id, d]));
+  const withDevice = (e: (typeof events)[number]) => ({ ...e, devices: byId.get(e.device_id) });
+
+  switch (table) {
+    case "flood_events":
+      return events.slice(0, parseInt(sp.get("limit") ?? "200")).map(withDevice);
+    case "active_flood_events":
+      return events.filter((e) => e.ended_at === null).map(withDevice);
+    case "flood_counts":
+      return demoFloodCounts();
+    case "recommendations":
+      return demoRecommendations();
+    case "last_analysis": {
+      const r = demoRecommendations()[0];
+      return { generated_at: r?.generated_at ?? null, count: demoRecommendations().length };
+    }
+    case "flood_events_monthly": {
+      const m: Record<string, number> = {};
+      for (const e of events) {
+        const k = e.started_at.slice(0, 7);
+        m[k] = (m[k] ?? 0) + 1;
+      }
+      return Object.entries(m).sort().map(([month, count]) => ({ month, count }));
+    }
+    case "top_flooding": {
+      const counts = demoFloodCounts();
+      return Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, parseInt(sp.get("limit") ?? "10"))
+        .map(([device_id, count]) => ({ device_id, name: byId.get(device_id)?.name ?? null, count }));
+    }
+    case "flood_events_range": {
+      const start = sp.get("start") ?? "";
+      const end = sp.get("end") ?? "";
+      return events
+        .filter((e) => e.started_at >= start && e.started_at <= end)
+        .map(withDevice);
+    }
+    case "sensor_readings": {
+      const id = sp.get("device_id");
+      const limit = parseInt(sp.get("limit") ?? "10");
+      return demoReadings().filter((r) => !id || r.device_id === id).slice(0, limit);
+    }
+    default:
+      return null;
   }
 }

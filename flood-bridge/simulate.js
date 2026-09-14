@@ -44,27 +44,29 @@ const devices = Array.from({ length: 20 }, (_, i) => {
   };
 });
 
-// ── Seed devices into Supabase so FK constraints work ────────
+// ── Seed nodes into Supabase so the readings FK resolves ─────
+// Targets `nodes`, not `devices`: devices is a view now and cannot be written.
+// Status and depth are derived in SQL, so neither is set here.
 async function seedDevices() {
-  console.log('[SIM] Seeding devices into Supabase...');
+  console.log('[SIM] Seeding nodes into Supabase...');
+  const now = new Date().toISOString();
   for (const dev of devices) {
-    const { error } = await supabase.from('devices').upsert({
+    const { error } = await supabase.from('nodes').upsert({
+      dev_eui: dev.deviceId,
       device_id: dev.deviceId,
-      name: dev.name,
+      label: dev.name,
       lat: dev.lat,
-      lng: dev.lng,
-      altitude_baro: dev.altitudeBaro,
-      mailbox_height_cm: dev.mailboxHeightCm,
-      baseline_distance_cm: dev.baselineDistanceCm,
-      status: 'online',
-      battery_v: dev.battery,
-      last_seen: new Date().toISOString(),
-      installed_at: new Date().toISOString(),
+      lon: dev.lng,
+      elevation_mm: dev.altitudeBaro != null ? Math.round(dev.altitudeBaro * 1000) : null,
+      baseline_mm: Math.round((dev.baselineDistanceCm ?? dev.mailboxHeightCm ?? 95) * 10),
       neighborhood: dev.neighborhood,
-    }, { onConflict: 'device_id' });
+      last_seen: now,
+      installed_at: now,
+      commissioned_at: now,
+    }, { onConflict: 'dev_eui' });
     if (error) console.error(`[SIM] Failed to seed ${dev.deviceId}:`, error.message);
   }
-  console.log(`[SIM] Seeded ${devices.length} devices.`);
+  console.log(`[SIM] Seeded ${devices.length} nodes.`);
 }
 
 // ── State tracking ──────────────────────────────────────────

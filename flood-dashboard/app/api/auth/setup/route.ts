@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { requireSecret } from "@/lib/require-auth";
 
 export async function POST(request: Request) {
+  // Creates a confirmed dashboard account using the service key. Without a
+  // guard anyone could mint themselves a login, so this requires
+  // ADMIN_SETUP_SECRET and fails closed when that is not configured.
+  const denied = requireSecret(request, "ADMIN_SETUP_SECRET");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const { email, password } = body;

@@ -102,31 +102,25 @@ ALTER TABLE sensor_readings               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE flood_events                  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE infrastructure_recommendations ENABLE ROW LEVEL SECURITY;
 
--- Service-role full access (bridge service writes)
-CREATE POLICY "Service role full access" ON devices
-  FOR ALL USING (TRUE) WITH CHECK (TRUE);
-
-CREATE POLICY "Service role full access" ON sensor_readings
-  FOR ALL USING (TRUE) WITH CHECK (TRUE);
-
-CREATE POLICY "Service role full access" ON flood_events
-  FOR ALL USING (TRUE) WITH CHECK (TRUE);
-
-CREATE POLICY "Service role full access" ON infrastructure_recommendations
-  FOR ALL USING (TRUE) WITH CHECK (TRUE);
+-- NOTE: the bridge service connects with the SERVICE ROLE key, which bypasses
+-- RLS completely. It therefore needs no policy of its own. A policy written as
+--     CREATE POLICY ... FOR ALL USING (TRUE) WITH CHECK (TRUE);
+-- has no TO clause, so it defaults to TO PUBLIC and hands the public anon key
+-- full INSERT/UPDATE/DELETE on the table. That is why there is no such policy
+-- here: the anon key is shipped in the browser bundle and must stay read-only.
 
 -- Anon read-only access (dashboard frontend)
 CREATE POLICY "Anon read access" ON devices
-  FOR SELECT USING (TRUE);
+  FOR SELECT TO anon, authenticated USING (TRUE);
 
 CREATE POLICY "Anon read access" ON sensor_readings
-  FOR SELECT USING (TRUE);
+  FOR SELECT TO anon, authenticated USING (TRUE);
 
 CREATE POLICY "Anon read access" ON flood_events
-  FOR SELECT USING (TRUE);
+  FOR SELECT TO anon, authenticated USING (TRUE);
 
 CREATE POLICY "Anon read access" ON infrastructure_recommendations
-  FOR SELECT USING (TRUE);
+  FOR SELECT TO anon, authenticated USING (TRUE);
 
 -- ============================================================
 -- REALTIME — enable for live dashboard updates

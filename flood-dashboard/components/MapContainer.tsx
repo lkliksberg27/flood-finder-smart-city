@@ -6,6 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import type { Device } from "@/lib/types";
 import { getReadings24h } from "@/lib/queries";
 import { getSupabase } from "@/lib/supabase";
+import { demoEvents } from "@/lib/demo-data";
 import { queryMapboxRoads, calculateFloodFeatures, type FloodConditions } from "@/lib/golden-beach-roads";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
@@ -77,6 +78,9 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
 
   const loadPopupData = useCallback(async (deviceId: string) => {
     try {
+      // Clicking a pin is the first thing anyone does, so the popup has to
+      // work without a database too. Fall back to the generated event history
+      // rather than rendering an empty panel.
       const [readings, floodRes] = await Promise.all([
         getReadings24h(deviceId),
         getSupabase()
@@ -84,7 +88,19 @@ export function DeviceMap({ devices, onDeviceClick, highlightDeviceId, height = 
           .select("started_at, peak_depth_cm, duration_minutes, rainfall_mm, tide_level_m")
           .eq("device_id", deviceId)
           .order("started_at", { ascending: false })
-          .limit(5),
+          .limit(5)
+          .then((r) =>
+            r.error || !r.data?.length
+              ? {
+                  data: demoEvents()
+                    .filter((e) => e.device_id === deviceId)
+                    .slice(0, 5)
+                    .map(({ started_at, peak_depth_cm, duration_minutes, rainfall_mm, tide_level_m }) =>
+                      ({ started_at, peak_depth_cm, duration_minutes, rainfall_mm, tide_level_m })),
+                  error: null,
+                }
+              : r,
+          ),
       ]);
 
       const container = document.querySelector(`[data-popup-data="${deviceId}"]`);

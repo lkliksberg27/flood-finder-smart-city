@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/components/AuthGate";
 import { getSupabase } from "@/lib/supabase";
+import { getAllDevices, getActiveFloodEvents } from "@/lib/queries";
 
 const navItems = [
   { href: "/", label: "Overview", icon: Map, description: "Live sensor map & weather" },
@@ -51,18 +52,20 @@ export function Sidebar() {
 
   useEffect(() => {
     async function fetchCount() {
+      // Goes through the query helpers rather than Supabase directly, because
+      // those fall back to the generated dataset when there is no database.
+      //
+      // The old version asked Supabase for a head-only count. On failure the
+      // client returns { count: null, error } instead of throwing, so the catch
+      // never ran and `count ?? 0` rendered a confident "0 sensors connected"
+      // next to a map showing nineteen of them.
       try {
-        const [{ count }, alertRes] = await Promise.all([
-          getSupabase()
-            .from("devices")
-            .select("device_id", { count: "exact", head: true }),
-          getSupabase()
-            .from("flood_events")
-            .select("id", { count: "exact", head: true })
-            .is("ended_at", null),
+        const [devices, active] = await Promise.all([
+          getAllDevices(),
+          getActiveFloodEvents().catch(() => []),
         ]);
-        setSensorCount(count ?? 0);
-        setActiveAlerts(alertRes.count ?? 0);
+        setSensorCount(devices.length);
+        setActiveAlerts(active.length);
       } catch {
         setSensorCount(null);
       }
@@ -70,9 +73,10 @@ export function Sidebar() {
 
     async function fetchSearchData() {
       try {
-        const { data } = await getSupabase()
-          .from("devices")
-          .select("device_id, name, neighborhood");
+        // getAllDevices falls back to the generated fleet, so search still
+        // works with no database. Querying Supabase directly here left the
+        // search box silently empty.
+        const data = await getAllDevices();
         if (data) {
           const hoods = [...new Set(data.map((d) => d.neighborhood).filter(Boolean))] as string[];
           setNeighborhoods(hoods.sort());

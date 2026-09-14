@@ -48,6 +48,14 @@ export default function ElevationPage() {
 
   const dips = useMemo(() => findRoadDips(devices, floodCounts), [devices, floodCounts]);
 
+  // No surveyed node and no datum yet: the database measures every height up
+  // from the lowest monitored street, so "below 1 m" really means "within 1 m
+  // of the lowest street". Say so rather than imply surveyed metres.
+  const relative = useMemo(
+    () => devices.some((d) => d.elevation_source === "baro_relative"),
+    [devices]
+  );
+
   // Elevation profile data — sorted from lowest to highest
   const profileData = useMemo(() => {
     return devices
@@ -111,7 +119,7 @@ export default function ElevationPage() {
             onChange={(e) => setShowOverlay(e.target.checked)}
             className="accent-status-blue"
           />
-          Show elevation overlay
+          Show water flow paths
         </label>
       </div>
 
@@ -139,7 +147,9 @@ export default function ElevationPage() {
             </p>
           </div>
           <div className="bg-bg-card border border-border-card rounded-lg p-2.5">
-            <p className="text-[10px] text-text-secondary uppercase">Below 1m</p>
+            <p className="text-[10px] text-text-secondary uppercase">
+              {relative ? "Within 1m of lowest" : "Below 1m"}
+            </p>
             <p className={`text-lg font-bold ${stats.belowOne > 0 ? "text-status-amber" : "text-status-green"}`}>
               {stats.belowOne}/{stats.total}
             </p>
@@ -149,10 +159,47 @@ export default function ElevationPage() {
 
       {/* Map + Road dips sidebar */}
       <div className="flex gap-3 shrink-0" style={{ minHeight: "340px" }}>
-        <div className="flex-1">
+        <div className="flex-1 flex flex-col gap-2">
           <MapErrorBoundary>
             <ElevationMap devices={devices} floodCounts={floodCounts} showOverlay={showOverlay} />
           </MapErrorBoundary>
+
+          {/* Legend. The arrows are a derived model, not a measurement, and
+              saying so is the difference between a useful map and a misleading
+              one when a city planner is looking at it. */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] text-text-secondary
+                          bg-bg-card border border-border-card rounded-lg px-3 py-2">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-6 h-[3px] rounded-full" style={{ background: "#60a5fa" }} />
+              steep
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-6 h-[2px] rounded-full" style={{ background: "#1e3a8a" }} />
+              shallow
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span style={{ color: "#93c5fd" }}>&#9654;</span>
+              direction water drains
+            </span>
+            <span className="w-px h-3 bg-border-card" />
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#059669" }} />
+              low risk
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#f59e0b" }} />
+              moderate
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#dc2626" }} />
+              high
+            </span>
+            <span className="ml-auto italic opacity-70">
+              {relative
+                ? "Heights measured up from the lowest street by barometer, not surveyed"
+                : "Flow inferred from barometric elevation, not surveyed"}
+            </span>
+          </div>
         </div>
 
         {/* Road dips panel */}

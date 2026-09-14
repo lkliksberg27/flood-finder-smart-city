@@ -2,16 +2,17 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { AuthGate } from "@/components/AuthGate";
 import { Sidebar } from "@/components/Sidebar";
+import { DemoBanner } from "@/components/DemoBanner";
 
 export const metadata: Metadata = {
   title: {
-    default: "Flood Finder — City Dashboard",
-    template: "%s — Flood Finder",
+    default: "Flood Finder City Dashboard",
+    template: "%s - Flood Finder",
   },
   description:
     "Real-time city-wide flood detection and infrastructure analysis for Golden Beach, FL. IoT sensors, NOAA weather/tide correlation, AI-powered recommendations.",
   openGraph: {
-    title: "Flood Finder — Smart City Flood Monitoring",
+    title: "Flood Finder: Smart City Flood Monitoring",
     description:
       "Real-time flood detection with IoT sensors, NOAA data correlation, and AI infrastructure analysis for Golden Beach, FL.",
     type: "website",
@@ -41,9 +42,11 @@ export default function RootLayout({
           {/* Desktop layout */}
           <div className="hidden lg:flex min-h-screen">
             <Sidebar />
-            <main className="ml-[220px] flex-1 p-6 overflow-auto">
-              {children}
-            </main>
+            <div className="ml-[220px] flex-1 flex flex-col min-w-0">
+              {/* Renders only when the app had to fall back to generated data */}
+              <DemoBanner />
+              <main className="flex-1 p-6 overflow-auto">{children}</main>
+            </div>
           </div>
         </AuthGate>
       </body>
